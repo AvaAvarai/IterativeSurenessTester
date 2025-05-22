@@ -166,8 +166,8 @@ def plot_parallel_coordinates_grid(training_subsets, test_sets, increment_size):
     n_cols = min(4, n_plots)  # Maximum 4 columns
     n_rows = math.ceil(n_plots / n_cols)
     
-    # Create figure with subplots
-    fig = plt.figure(figsize=(20, 5 * n_rows))
+    # Create figure with subplots and constrained layout
+    fig = plt.figure(figsize=(24, 6 * n_rows), constrained_layout=True)
     
     # Create a subplot for each subset size
     for i, (X_subset, y_subset) in enumerate(exp_subsets):
@@ -182,6 +182,7 @@ def plot_parallel_coordinates_grid(training_subsets, test_sets, increment_size):
             if cls in y_subset.unique():
                 mask = plot_data['class'] == cls
                 parallel_coordinates(plot_data[mask], 'class', color=[class_colors[cls]], ax=ax)
+                ax.get_legend().remove()  # Remove individual legends
         
         # Customize plot
         subset_size = len(X_subset)
@@ -190,9 +191,6 @@ def plot_parallel_coordinates_grid(training_subsets, test_sets, increment_size):
         
         # Rotate x-axis labels for better readability
         plt.xticks(rotation=45)
-        
-        # Adjust layout
-        plt.tight_layout()
     
     # Add test set plot as the last subplot
     ax = plt.subplot(n_rows, n_cols, n_plots)
@@ -204,18 +202,19 @@ def plot_parallel_coordinates_grid(training_subsets, test_sets, increment_size):
         if cls in y_test.unique():
             mask = plot_data['class'] == cls
             parallel_coordinates(plot_data[mask], 'class', color=[class_colors[cls]], ax=ax)
+            ax.get_legend().remove()  # Remove individual legends
     
     ax.set_title(f'Test Set (Size: {len(X_test)})')
     ax.grid(True)
     plt.xticks(rotation=45)
     
-    # Add legend
+    # Add single legend in bottom right corner
     handles = [plt.Line2D([0], [0], color=color, label=cls) 
               for cls, color in class_colors.items()]
-    fig.legend(handles=handles, loc='center right', bbox_to_anchor=(0.98, 0.5))
+    fig.legend(handles=handles, loc='lower right', bbox_to_anchor=(0.98, 0.02))
     
-    # Save the figure
-    plt.savefig('results/parallel_coordinates_grid.png', bbox_inches='tight', dpi=300)
+    # Save the figure with high DPI
+    plt.savefig('results/parallel_coordinates_grid.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 def main():
@@ -233,6 +232,8 @@ def main():
                       help='Increment size for training (default: 5)')
     parser.add_argument('--threshold', type=float, default=0.95,
                       help='Accuracy threshold to track (default: 0.95)')
+    parser.add_argument('--plot', action='store_true',
+                      help='Show parallel coordinates plots (default: False)')
     
     args = parser.parse_args()
     
@@ -252,9 +253,10 @@ def main():
         X, y, args.classifier, args.k, args.experiments, args.increment, args.threshold
     )
     
-    # Create parallel coordinates grid plot
-    print("\nCreating parallel coordinates grid plot...")
-    plot_parallel_coordinates_grid(training_subsets, test_sets, args.increment)
+    # Create parallel coordinates grid plot if requested
+    if args.plot:
+        print("\nCreating parallel coordinates grid plot...")
+        plot_parallel_coordinates_grid(training_subsets, test_sets, args.increment)
     
     # Plot results
     plot_results(all_accuracies, threshold_reached, args.increment, args.threshold, args.classifier)
