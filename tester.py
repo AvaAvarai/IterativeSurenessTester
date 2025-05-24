@@ -60,7 +60,7 @@ def get_classifier(classifier_type, k_value=None):
     else:
         raise ValueError(f"Unsupported classifier type: {classifier_type}")
 
-def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_value=None, n_experiments=10, increment_size=5, threshold=0.95):
+def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_value=None, n_experiments=10, increment_size=5, threshold=0.95, save_converged=False):
     n_samples = len(X)
     
     if X_test is None:
@@ -76,6 +76,7 @@ def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_valu
     threshold_reached = []  # Store when threshold is reached for each experiment
     training_subsets = []  # Store the training subsets for plotting
     test_sets = []  # Store the test sets for plotting
+    converged_data = []  # Store the converged data for each experiment
     
     for exp in tqdm(range(n_experiments), desc="Running experiments"):
         if X_test is None:
@@ -102,6 +103,7 @@ def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_valu
         exp_accuracies = []
         threshold_reached_this_exp = None
         exp_subsets = []  # Store subsets for this experiment
+        converged_subset = None  # Store the converged subset for this experiment
         
         # Incremental training
         for i in range(increment_size, train_size + 1, increment_size):
@@ -129,10 +131,23 @@ def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_valu
             # Check if threshold is reached
             if threshold_reached_this_exp is None and accuracy >= threshold:
                 threshold_reached_this_exp = i
+                converged_subset = (X_train_subset, y_train_subset)
         
         all_accuracies.append(exp_accuracies)
         threshold_reached.append(threshold_reached_this_exp)
         training_subsets.append(exp_subsets)
+        converged_data.append(converged_subset)
+    
+    # Save converged data if requested
+    if save_converged and any(converged_data):
+        os.makedirs('results', exist_ok=True)
+        for i, (X_conv, y_conv) in enumerate(converged_data):
+            if X_conv is not None:
+                # Combine features and labels
+                conv_df = X_conv.copy()
+                conv_df['class'] = y_conv
+                # Save to CSV
+                conv_df.to_csv(f'results/converged_data_exp_{i+1}.csv', index=False)
     
     return all_accuracies, threshold_reached, training_subsets, test_sets
 
@@ -265,6 +280,8 @@ def main():
                       help='Accuracy threshold to track (default: 0.95)')
     parser.add_argument('--plot', action='store_true',
                       help='Show parallel coordinates plots (default: False)')
+    parser.add_argument('--save-converged', action='store_true',
+                      help='Save converged data to CSV files (default: False)')
     
     args = parser.parse_args()
     
@@ -281,7 +298,8 @@ def main():
         print(f"Using k={args.k} for KNN")
     
     all_accuracies, threshold_reached, training_subsets, test_sets = run_experiment(
-        X, y, X_test, y_test, args.classifier, args.k, args.experiments, args.increment, args.threshold
+        X, y, X_test, y_test, args.classifier, args.k, args.experiments, 
+        args.increment, args.threshold, args.save_converged
     )
     
     # Create parallel coordinates grid plot if requested
