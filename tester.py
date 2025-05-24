@@ -11,24 +11,41 @@ import os
 import argparse
 import math
 
-def load_and_preprocess_data(file_path):
-    # Load the dataset
-    df = pd.read_csv(file_path)
+def load_and_preprocess_data(train_file, test_file=None):
+    # Load the training dataset
+    train_df = pd.read_csv(train_file)
     
     # Find the class column (case-insensitive)
-    class_col = [col for col in df.columns if col.lower() == 'class'][0]
+    class_col = [col for col in train_df.columns if col.lower() == 'class'][0]
     
     # Convert class column to string type
-    df[class_col] = df[class_col].astype(str)
+    train_df[class_col] = train_df[class_col].astype(str)
     
     # Separate features and labels
-    X = df.drop(columns=[class_col])
-    y = df[class_col]
+    X_train = train_df.drop(columns=[class_col])
+    y_train = train_df[class_col]
     
-    # Normalize features to [0,1] range
-    X = (X - X.min()) / (X.max() - X.min())
-    
-    return X, y, df[class_col].unique()
+    if test_file:
+        # Load test data
+        test_df = pd.read_csv(test_file)
+        test_df[class_col] = test_df[class_col].astype(str)
+        X_test = test_df.drop(columns=[class_col])
+        y_test = test_df[class_col]
+        
+        # Calculate min and max across both datasets
+        combined_X = pd.concat([X_train, X_test])
+        min_vals = combined_X.min()
+        max_vals = combined_X.max()
+        
+        # Normalize both datasets using the same min and max values
+        X_train = (X_train - min_vals) / (max_vals - min_vals)
+        X_test = (X_test - min_vals) / (max_vals - min_vals)
+        
+        return X_train, y_train, X_test, y_test, train_df[class_col].unique()
+    else:
+        # If no test file, normalize just the training data
+        X_train = (X_train - X_train.min()) / (X_train.max() - X_train.min())
+        return X_train, y_train, None, None, train_df[class_col].unique()
 
 def get_classifier(classifier_type, k_value=None):
     """
@@ -43,10 +60,16 @@ def get_classifier(classifier_type, k_value=None):
     else:
         raise ValueError(f"Unsupported classifier type: {classifier_type}")
 
-def run_experiment(X, y, classifier_type='svm', k_value=None, n_experiments=10, increment_size=5, threshold=0.95):
+def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_value=None, n_experiments=10, increment_size=5, threshold=0.95):
     n_samples = len(X)
-    eval_size = int(0.3 * n_samples)
-    train_size = n_samples - eval_size
+    
+    if X_test is None:
+        # Use random split if no test file provided
+        eval_size = int(0.3 * n_samples)
+        train_size = n_samples - eval_size
+    else:
+        # Use all training data when test file is provided
+        train_size = n_samples
     
     # Store results
     all_accuracies = []
@@ -55,16 +78,22 @@ def run_experiment(X, y, classifier_type='svm', k_value=None, n_experiments=10, 
     test_sets = []  # Store the test sets for plotting
     
     for exp in tqdm(range(n_experiments), desc="Running experiments"):
-        # Shuffle data
-        indices = np.random.permutation(n_samples)
-        X_shuffled = X.iloc[indices]
-        y_shuffled = y.iloc[indices]
-        
-        # Split into train and eval
-        X_eval = X_shuffled[:eval_size]
-        y_eval = y_shuffled[:eval_size]
-        X_train = X_shuffled[eval_size:]
-        y_train = y_shuffled[eval_size:]
+        if X_test is None:
+            # Shuffle data and split into train and eval
+            indices = np.random.permutation(n_samples)
+            X_shuffled = X.iloc[indices]
+            y_shuffled = y.iloc[indices]
+            
+            X_eval = X_shuffled[:eval_size]
+            y_eval = y_shuffled[:eval_size]
+            X_train = X_shuffled[eval_size:]
+            y_train = y_shuffled[eval_size:]
+        else:
+            # Use provided test data
+            X_train = X
+            y_train = y
+            X_eval = X_test
+            y_eval = y_test
         
         # Store test set for plotting
         test_sets.append((X_eval, y_eval))
@@ -224,8 +253,10 @@ def main():
                       help='Classifier type to use (svm or knn)')
     parser.add_argument('--k', type=int,
                       help='k value for KNN classifier (required if classifier is knn)')
-    parser.add_argument('--data', type=str, default='fisher_iris.csv',
-                      help='Path to the dataset file (default: fisher_iris.csv)')
+    parser.add_argument('--train-data', type=str, required=True,
+                      help='Path to the training dataset file')
+    parser.add_argument('--test-data', type=str,
+                      help='Path to the test dataset file (optional)')
     parser.add_argument('--experiments', type=int, default=100,
                       help='Number of experiments to run (default: 100)')
     parser.add_argument('--increment', type=int, default=5,
@@ -242,7 +273,7 @@ def main():
         parser.error("--k value is required when using KNN classifier")
     
     # Load and preprocess data
-    X, y, classes = load_and_preprocess_data(args.data)
+    X, y, X_test, y_test, classes = load_and_preprocess_data(args.train_data, args.test_data)
     
     # Run experiments with selected classifier
     print(f"\nRunning experiments with {args.classifier.upper()}")
@@ -250,7 +281,7 @@ def main():
         print(f"Using k={args.k} for KNN")
     
     all_accuracies, threshold_reached, training_subsets, test_sets = run_experiment(
-        X, y, args.classifier, args.k, args.experiments, args.increment, args.threshold
+        X, y, X_test, y_test, args.classifier, args.k, args.experiments, args.increment, args.threshold
     )
     
     # Create parallel coordinates grid plot if requested
