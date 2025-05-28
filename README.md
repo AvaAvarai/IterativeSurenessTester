@@ -2,8 +2,6 @@
 
 First sureness measure test tool with Supervised Iterative Learning alternative to Active Learning to find ML model stability point in supervised classifiers.
 
-A tool for testing iterative learning algorithms with various classifiers and data configurations.
-
 ![Screenshot](parallel_coordinates_grid.png)
 
 ## Usage
