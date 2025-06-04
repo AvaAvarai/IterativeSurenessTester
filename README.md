@@ -59,3 +59,7 @@ Input CSV files should contain:
 - Features as columns
 - A column named 'class' (case-insensitive) containing the class labels
 - All features should be numeric
+
+## License
+
+IterativeSurenessTester is licensed under the MIT License, allowing free use for both personal and commercial purposes. For full terms, see the `LICENSE` file.
