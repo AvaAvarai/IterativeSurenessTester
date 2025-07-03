@@ -184,7 +184,7 @@ def plot_results(all_accuracies, threshold_reached, increment_size, threshold, c
     plt.savefig(f'results/accuracy_progression_{classifier_type.lower()}.png')
     plt.close()
 
-def plot_parallel_coordinates_grid(training_subsets, test_sets, increment_size):
+def plot_parallel_coordinates_grid(training_subsets, test_sets, increment_size, threshold_reached=None, threshold=0.95):
     """
     Create a grid of parallel coordinate plots showing data distribution at different subset sizes
     """
@@ -194,6 +194,15 @@ def plot_parallel_coordinates_grid(training_subsets, test_sets, increment_size):
     # Use the first experiment's subsets for plotting
     exp_subsets = training_subsets[0]
     X_test, y_test = test_sets[0]
+    
+    # Check if threshold was reached in the first experiment
+    threshold_subplot = None
+    if threshold_reached and len(threshold_reached) > 0 and threshold_reached[0] is not None:
+        # Calculate which subplot corresponds to the threshold
+        threshold_subplot = (threshold_reached[0] // increment_size) - 1  # -1 because we start from increment_size
+        print(f"\n🎯 THRESHOLD REACHED: Subplot {threshold_subplot + 1} (training subset size: {threshold_reached[0]}) reached accuracy threshold {threshold}")
+    else:
+        print(f"\n❌ THRESHOLD NOT REACHED: No subplot reached the accuracy threshold of {threshold}")
     
     # Get all unique classes and create consistent color mapping
     all_classes = set()
@@ -230,7 +239,15 @@ def plot_parallel_coordinates_grid(training_subsets, test_sets, increment_size):
         
         # Customize plot
         subset_size = len(X_subset)
-        ax.set_title(f'Training Subset Size: {subset_size}')
+        if threshold_subplot is not None and i == threshold_subplot:
+            ax.set_title(f'Training Subset Size: {subset_size} 🎯 THRESHOLD REACHED!', 
+                        color='red', fontweight='bold', fontsize=12)
+            # Add a red border around the threshold subplot
+            for spine in ax.spines.values():
+                spine.set_edgecolor('red')
+                spine.set_linewidth(3)
+        else:
+            ax.set_title(f'Training Subset Size: {subset_size}')
         ax.grid(True)
         
         # Rotate x-axis labels for better readability
@@ -305,7 +322,7 @@ def main():
     # Create parallel coordinates grid plot if requested
     if args.plot:
         print("\nCreating parallel coordinates grid plot...")
-        plot_parallel_coordinates_grid(training_subsets, test_sets, args.increment)
+        plot_parallel_coordinates_grid(training_subsets, test_sets, args.increment, threshold_reached, args.threshold)
     
     # Plot results
     plot_results(all_accuracies, threshold_reached, args.increment, args.threshold, args.classifier)
