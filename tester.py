@@ -65,12 +65,15 @@ def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_valu
     
     if X_test is None:
         # Use random split if no test file provided
-        eval_size = int(0.3 * n_samples)
+        eval_size = int(round(0.3 * n_samples))
         train_size = n_samples - eval_size
     else:
         # Use all training data when test file is provided
         train_size = n_samples
     
+    print(f"Number of training samples: {train_size}")
+    print(f"Number of test samples: {eval_size}")
+
     # Store results
     all_accuracies = []
     threshold_reached = []  # Store when threshold is reached for each experiment
@@ -141,8 +144,9 @@ def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_valu
     # Save converged data if requested
     if save_converged and any(converged_data):
         os.makedirs('results', exist_ok=True)
-        for i, (X_conv, y_conv) in enumerate(converged_data):
-            if X_conv is not None:
+        for i, conv_data in enumerate(converged_data):
+            if conv_data is not None:
+                X_conv, y_conv = conv_data
                 # Combine features and labels
                 conv_df = X_conv.copy()
                 conv_df['class'] = y_conv
@@ -191,28 +195,63 @@ def plot_parallel_coordinates_grid(training_subsets, test_sets, increment_size, 
     # Create results directory if it doesn't exist
     os.makedirs('results', exist_ok=True)
     
-    # Use the first experiment's subsets for plotting
-    exp_subsets = training_subsets[0]
-    X_test, y_test = test_sets[0]
+    # Find the experiment with dataset size closest to median of converged dataset sizes
+    valid_thresholds = [t for t in threshold_reached if t is not None]
     
-    # Check if threshold was reached in the first experiment
-    threshold_subplot = None
-    if threshold_reached and len(threshold_reached) > 0 and threshold_reached[0] is not None:
-        # Calculate which subplot corresponds to the threshold
-        threshold_subplot = (threshold_reached[0] // increment_size) - 1  # -1 because we start from increment_size
-        print(f"\n🎯 THRESHOLD REACHED: Subplot {threshold_subplot + 1} (training subset size: {threshold_reached[0]}) reached accuracy threshold {threshold}")
+    if not valid_thresholds:
+        # If no experiments reached threshold, use the first experiment
+        selected_exp_idx = 0
+        print(f"\n[WARNING] No experiment reached the accuracy threshold of {threshold}")
+        print("Using first experiment for plotting")
     else:
-        print(f"\n❌ THRESHOLD NOT REACHED: No subplot reached the accuracy threshold of {threshold}")
+        # Calculate median of converged dataset sizes
+        median_size = np.median(valid_thresholds)
+        
+        # Find experiment with threshold size closest to median
+        closest_idx = min(range(len(threshold_reached)), 
+                         key=lambda i: abs(threshold_reached[i] - median_size) if threshold_reached[i] is not None else float('inf'))
+        
+        selected_exp_idx = closest_idx
+        selected_threshold_size = threshold_reached[closest_idx]
+        
+        print(f"\n[SELECTED] Experiment {closest_idx + 1} with threshold size {selected_threshold_size}")
+        print(f"[MEDIAN] Converged size: {median_size:.1f} samples")
+        print(f"[THRESHOLD] {len(valid_thresholds)}/{len(threshold_reached)} experiments reached accuracy threshold {threshold}")
+        print(f"[SAMPLES NEEDED] {valid_thresholds}")
+        print(f"[PLOTTED CSV] converged_data_exp_{closest_idx + 1}.csv")
+    
+    # Use the selected experiment's subsets for plotting
+    exp_subsets = training_subsets[selected_exp_idx]
+    X_test, y_test = test_sets[selected_exp_idx]
+    
+    # Check if threshold was reached in the selected experiment
+    threshold_subplot = None
+    if threshold_reached and len(threshold_reached) > selected_exp_idx and threshold_reached[selected_exp_idx] is not None:
+        # Calculate which subplot corresponds to the threshold
+        threshold_subplot = (threshold_reached[selected_exp_idx] // increment_size) - 1  # -1 because we start from increment_size
+        print(f"[THRESHOLD] Subplot {threshold_subplot + 1} (training subset size: {threshold_reached[selected_exp_idx]}) reached accuracy threshold {threshold}")
     
     # Get all unique classes and create consistent color mapping
     all_classes = set()
     for _, y_subset in exp_subsets:
         all_classes.update(y_subset.unique())
     all_classes.update(y_test.unique())
-    
-    # Create color mapping using Set2 colormap
-    colors = plt.cm.Set2(np.linspace(0, 1, len(all_classes)))
-    class_colors = dict(zip(sorted(all_classes), colors))
+    # Create color mapping: 'benign' (case-insensitive) -> green, 'malignant' -> red, others use Set2 colormap
+    class_colors = {}
+    used_classes = set()
+    for cls in all_classes:
+        if str(cls).lower() == 'benign':
+            class_colors[cls] = 'green'
+            used_classes.add(cls)
+        elif str(cls).lower() == 'malignant':
+            class_colors[cls] = 'red'
+            used_classes.add(cls)
+    # Assign Set2 colors to any remaining classes
+    remaining_classes = sorted(all_classes - used_classes)
+    if remaining_classes:
+        colors = plt.cm.Set2(np.linspace(0, 1, len(remaining_classes)))
+        for c, color in zip(remaining_classes, colors):
+            class_colors[c] = color
     
     # Calculate grid dimensions (including test set plot)
     n_plots = len(exp_subsets) + 1  # +1 for test set
@@ -230,17 +269,51 @@ def plot_parallel_coordinates_grid(training_subsets, test_sets, increment_size, 
         plot_data = X_subset.copy()
         plot_data['class'] = y_subset
         
-        # Plot parallel coordinates with consistent colors
+        # Plot ALL cases with their respective class colors
         for cls in sorted(all_classes):
             if cls in y_subset.unique():
                 mask = plot_data['class'] == cls
-                parallel_coordinates(plot_data[mask], 'class', color=[class_colors[cls]], ax=ax)
+                parallel_coordinates(plot_data[mask], 'class', color=[class_colors[cls]], ax=ax, alpha=1.0)
                 ax.get_legend().remove()  # Remove individual legends
+        
+        # Add outline for newly added cases
+        if i > 0:
+            # Get previous subset to identify new cases
+            prev_X_subset, prev_y_subset = exp_subsets[i-1]
+            prev_size = len(prev_X_subset)
+            
+            # Get the newly added cases (from prev_size onwards)
+            new_X_subset = X_subset.iloc[prev_size:]
+            new_y_subset = y_subset.iloc[prev_size:]
+
+            if len(new_X_subset) > 0:
+                new_plot_data = new_X_subset.copy()
+                new_plot_data['class'] = new_y_subset
+                # Plot newly added cases with thick outline and hue-shifted color
+                import colorsys
+
+                def hue_shift_color(color, shift=0.15):
+                    # Convert color to RGB if it's a string (e.g., 'green', 'red')
+                    import matplotlib.colors as mcolors
+                    rgb = mcolors.to_rgb(color) if isinstance(color, str) else color
+                    h, l, s = colorsys.rgb_to_hls(*rgb)
+                    h = (h + shift) % 1.0
+                    r, g, b = colorsys.hls_to_rgb(h, l, s)
+                    return (r, g, b)
+
+                for cls in sorted(all_classes):
+                    if cls in new_y_subset.unique():
+                        mask = new_plot_data['class'] == cls
+                        # Hue shift the class color for added cases
+                        base_color = class_colors[cls]
+                        shifted_color = hue_shift_color(base_color, shift=0.15)
+                        parallel_coordinates(new_plot_data[mask], 'class', color=[shifted_color], ax=ax, alpha=1.0, linewidth=5)
+                        ax.get_legend().remove()
         
         # Customize plot
         subset_size = len(X_subset)
         if threshold_subplot is not None and i == threshold_subplot:
-            ax.set_title(f'Training Subset Size: {subset_size} 🎯 THRESHOLD REACHED!', 
+            ax.set_title(f'Training Subset Size: {subset_size} [THRESHOLD REACHED!]', 
                         color='red', fontweight='bold', fontsize=12)
             # Add a red border around the threshold subplot
             for spine in ax.spines.values():
@@ -275,7 +348,14 @@ def plot_parallel_coordinates_grid(training_subsets, test_sets, increment_size, 
     fig.legend(handles=handles, loc='lower right', bbox_to_anchor=(0.98, 0.02))
     
     # Save the figure with high DPI
-    plt.savefig('results/parallel_coordinates_grid.png', dpi=300, bbox_inches='tight')
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f'results/parallel_coordinates_grid_{timestamp}.png'
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    
+    print(f"[PLOT SAVED] New plot generated: {filename}")
+    print(f"[PLOT SAVED] Also saved as: results/parallel_coordinates_grid.png")
+    
     plt.close()
 
 def main():
@@ -308,7 +388,7 @@ def main():
     
     # Load and preprocess data
     X, y, X_test, y_test, classes = load_and_preprocess_data(args.train_data, args.test_data)
-    
+
     # Run experiments with selected classifier
     print(f"\nRunning experiments with {args.classifier.upper()}")
     if args.classifier.lower() == 'knn':
