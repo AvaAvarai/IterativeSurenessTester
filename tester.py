@@ -219,6 +219,10 @@ def plot_parallel_coordinates_grid(training_subsets, test_sets, increment_size, 
         print(f"[THRESHOLD] {len(valid_thresholds)}/{len(threshold_reached)} experiments reached accuracy threshold {threshold}")
         print(f"[SAMPLES NEEDED] {valid_thresholds}")
         print(f"[PLOTTED CSV] converged_data_exp_{closest_idx + 1}.csv")
+        
+        # Find experiment with maximum cases
+        max_idx = valid_thresholds.index(max(valid_thresholds))
+        print(f"[MAX CASES CSV] converged_data_exp_{max_idx + 1}.csv")
     
     # Use the selected experiment's subsets for plotting
     exp_subsets = training_subsets[selected_exp_idx]
@@ -354,7 +358,6 @@ def plot_parallel_coordinates_grid(training_subsets, test_sets, increment_size, 
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     
     print(f"[PLOT SAVED] New plot generated: {filename}")
-    print(f"[PLOT SAVED] Also saved as: results/parallel_coordinates_grid.png")
     
     plt.close()
 
