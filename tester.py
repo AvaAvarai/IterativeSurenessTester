@@ -153,6 +153,13 @@ def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_valu
                 # Save to CSV
                 conv_df.to_csv(f'results/converged_data_exp_{i+1}.csv', index=False)
     
+    # Save training data CSV
+    os.makedirs('results', exist_ok=True)
+    train_df = X.copy()
+    train_df['class'] = y
+    train_df.to_csv('results/training_data.csv', index=False)
+    print(f"[TRAINING DATA] Saved to: results/training_data.csv")
+    
     return all_accuracies, threshold_reached, training_subsets, test_sets
 
 def plot_results(all_accuracies, threshold_reached, increment_size, threshold, classifier_type):
