@@ -60,7 +60,7 @@ def get_classifier(classifier_type, k_value=None):
     else:
         raise ValueError(f"Unsupported classifier type: {classifier_type}")
 
-def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_value=None, n_experiments=10, increment_size=5, threshold=0.95, save_converged=False):
+def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_value=None, n_experiments=10, increment_size=5, threshold=0.95, save_converged=False, training_method='increasing'):
     n_samples = len(X)
     
     if X_test is None:
@@ -108,33 +108,67 @@ def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_valu
         exp_subsets = []  # Store subsets for this experiment
         converged_subset = None  # Store the converged subset for this experiment
         
-        # Incremental training
-        for i in range(increment_size, train_size + 1, increment_size):
-            # Train on current subset
-            X_train_subset = X_train[:i]
-            y_train_subset = y_train[:i]
-            
-            # Store subset for plotting
-            exp_subsets.append((X_train_subset, y_train_subset))
-            
-            # Skip if not enough classes in training subset
-            if len(np.unique(y_train_subset)) < 2:
-                exp_accuracies.append(None)
-                continue
-            
-            # Get and train classifier
-            clf = get_classifier(classifier_type, k_value)
-            clf.fit(X_train_subset, y_train_subset)
-            
-            # Evaluate
-            y_pred = clf.predict(X_eval)
-            accuracy = accuracy_score(y_eval, y_pred)
-            exp_accuracies.append(accuracy)
-            
-            # Check if threshold is reached
-            if threshold_reached_this_exp is None and accuracy >= threshold:
-                threshold_reached_this_exp = i
-                converged_subset = (X_train_subset, y_train_subset)
+        # Incremental training based on method
+        if training_method.lower() == 'increasing':
+            # Increasing: Start with increment_size and add more cases
+            for i in range(increment_size, train_size + 1, increment_size):
+                # Train on current subset
+                X_train_subset = X_train[:i]
+                y_train_subset = y_train[:i]
+                
+                # Store subset for plotting
+                exp_subsets.append((X_train_subset, y_train_subset))
+                
+                # Skip if not enough classes in training subset
+                if len(np.unique(y_train_subset)) < 2:
+                    exp_accuracies.append(None)
+                    continue
+                
+                # Get and train classifier
+                clf = get_classifier(classifier_type, k_value)
+                clf.fit(X_train_subset, y_train_subset)
+                
+                # Evaluate
+                y_pred = clf.predict(X_eval)
+                accuracy = accuracy_score(y_eval, y_pred)
+                exp_accuracies.append(accuracy)
+                
+                # Check if threshold is reached
+                if threshold_reached_this_exp is None and accuracy >= threshold:
+                    threshold_reached_this_exp = i
+                    converged_subset = (X_train_subset, y_train_subset)
+        
+        elif training_method.lower() == 'decreasing':
+            # Decreasing: Start with all cases and remove increment_size at a time
+            for i in range(train_size, increment_size - 1, -increment_size):
+                # Train on current subset (from beginning to i)
+                X_train_subset = X_train[:i]
+                y_train_subset = y_train[:i]
+                
+                # Store subset for plotting
+                exp_subsets.append((X_train_subset, y_train_subset))
+                
+                # Skip if not enough classes in training subset
+                if len(np.unique(y_train_subset)) < 2:
+                    exp_accuracies.append(None)
+                    continue
+                
+                # Get and train classifier
+                clf = get_classifier(classifier_type, k_value)
+                clf.fit(X_train_subset, y_train_subset)
+                
+                # Evaluate
+                y_pred = clf.predict(X_eval)
+                accuracy = accuracy_score(y_eval, y_pred)
+                exp_accuracies.append(accuracy)
+                
+                # Check if threshold is reached
+                if threshold_reached_this_exp is None and accuracy >= threshold:
+                    threshold_reached_this_exp = i
+                    converged_subset = (X_train_subset, y_train_subset)
+        
+        else:
+            raise ValueError(f"Unsupported training method: {training_method}")
         
         all_accuracies.append(exp_accuracies)
         threshold_reached.append(threshold_reached_this_exp)
@@ -162,7 +196,7 @@ def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_valu
     
     return all_accuracies, threshold_reached, training_subsets, test_sets
 
-def plot_results(all_accuracies, threshold_reached, increment_size, threshold, classifier_type):
+def plot_results(all_accuracies, threshold_reached, increment_size, threshold, classifier_type, training_method='increasing'):
     # Create results directory if it doesn't exist
     os.makedirs('results', exist_ok=True)
     
@@ -174,7 +208,17 @@ def plot_results(all_accuracies, threshold_reached, increment_size, threshold, c
     mean_accuracies = np.nanmean(valid_accuracies, axis=0)
     std_accuracies = np.nanstd(valid_accuracies, axis=0)
     
-    x = np.arange(increment_size, len(mean_accuracies) * increment_size + increment_size, increment_size)
+    # Calculate x-axis based on training method
+    if training_method.lower() == 'increasing':
+        x = np.arange(increment_size, len(mean_accuracies) * increment_size + increment_size, increment_size)
+    else:  # decreasing
+        # For decreasing, we need to calculate the actual sample sizes
+        # This requires knowing the total training size, which we can estimate from the first experiment
+        if all_accuracies and all_accuracies[0]:
+            total_samples = len(all_accuracies[0]) * increment_size
+            x = np.arange(total_samples, total_samples - len(mean_accuracies) * increment_size, -increment_size)
+        else:
+            x = np.arange(len(mean_accuracies) * increment_size, increment_size - 1, -increment_size)
     plt.plot(x, mean_accuracies, 'b-', label='Mean Accuracy')
     plt.fill_between(x, mean_accuracies - std_accuracies, mean_accuracies + std_accuracies, alpha=0.2)
     
@@ -189,7 +233,7 @@ def plot_results(all_accuracies, threshold_reached, increment_size, threshold, c
     
     plt.xlabel('Number of Training Samples')
     plt.ylabel('Accuracy')
-    plt.title(f'{classifier_type.upper()} Accuracy vs Training Set Size')
+    plt.title(f'{classifier_type.upper()} Accuracy vs Training Set Size ({training_method.title()} Method)')
     plt.legend()
     plt.grid(True)
     plt.savefig(f'results/accuracy_progression_{classifier_type.lower()}.png')
@@ -389,6 +433,8 @@ def main():
                       help='Show parallel coordinates plots (default: False)')
     parser.add_argument('--save-converged', action='store_true',
                       help='Save converged data to CSV files (default: False)')
+    parser.add_argument('--training-method', type=str, choices=['increasing', 'decreasing'], default='increasing',
+                      help='Training method: increasing (add cases) or decreasing (remove cases) (default: increasing)')
     
     args = parser.parse_args()
     
@@ -401,12 +447,13 @@ def main():
 
     # Run experiments with selected classifier
     print(f"\nRunning experiments with {args.classifier.upper()}")
+    print(f"Training method: {args.training_method}")
     if args.classifier.lower() == 'knn':
         print(f"Using k={args.k} for KNN")
     
     all_accuracies, threshold_reached, training_subsets, test_sets = run_experiment(
         X, y, X_test, y_test, args.classifier, args.k, args.experiments, 
-        args.increment, args.threshold, args.save_converged
+        args.increment, args.threshold, args.save_converged, args.training_method
     )
     
     # Create parallel coordinates grid plot if requested
@@ -415,7 +462,7 @@ def main():
         plot_parallel_coordinates_grid(training_subsets, test_sets, args.increment, threshold_reached, args.threshold)
     
     # Plot results
-    plot_results(all_accuracies, threshold_reached, args.increment, args.threshold, args.classifier)
+    plot_results(all_accuracies, threshold_reached, args.increment, args.threshold, args.classifier, args.training_method)
     
     # Print summary statistics
     valid_accuracies = np.array([[acc if acc is not None else np.nan for acc in exp] for exp in all_accuracies])
@@ -423,6 +470,7 @@ def main():
     std_accuracies = np.nanstd(valid_accuracies, axis=0)
     
     print(f"\n{args.classifier.upper()} Results:")
+    print(f"Training method: {args.training_method}")
     print(f"Number of experiments: {args.experiments}")
     print(f"Increment size: {args.increment}")
     print(f"Accuracy threshold: {args.threshold}")
