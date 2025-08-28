@@ -60,7 +60,7 @@ def get_classifier(classifier_type, k_value=None):
     else:
         raise ValueError(f"Unsupported classifier type: {classifier_type}")
 
-def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_value=None, n_experiments=10, increment_size=5, threshold=0.95, save_converged=False, training_method='increasing'):
+def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_value=None, n_experiments=10, increment_size=5, threshold=0.95, save_converged=False, training_method='increasing', split_method='static'):
     n_samples = len(X)
     
     if X_test is None:
@@ -81,9 +81,40 @@ def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_valu
     test_sets = []  # Store the test sets for plotting
     converged_data = []  # Store the converged data for each experiment
     
+    # Handle split method
+    if X_test is not None:
+        # If test data is provided, use static split with provided data
+        split_method = 'static'
+        print(f"[SPLIT] Using provided test data with static split")
+    
+    # Pre-split for static method (same split for all experiments)
+    if split_method.lower() == 'static' and X_test is None:
+        indices = np.random.permutation(n_samples)
+        X_shuffled = X.iloc[indices]
+        y_shuffled = y.iloc[indices]
+        static_X_eval = X_shuffled[:eval_size]
+        static_y_eval = y_shuffled[:eval_size]
+        static_X_train = X_shuffled[eval_size:]
+        static_y_train = y_shuffled[eval_size:]
+        print(f"[SPLIT] Static split: {len(static_X_train)} train, {len(static_X_eval)} test samples")
+    
     for exp in tqdm(range(n_experiments), desc="Running experiments"):
-        if X_test is None:
-            # Shuffle data and split into train and eval
+        if split_method.lower() == 'static':
+            if X_test is not None:
+                # Use provided test data
+                X_train = X
+                y_train = y
+                X_eval = X_test
+                y_eval = y_test
+            else:
+                # Use pre-split static data
+                X_train = static_X_train
+                y_train = static_y_train
+                X_eval = static_X_eval
+                y_eval = static_y_eval
+        
+        elif split_method.lower() == 'per-run':
+            # New split for each experiment
             indices = np.random.permutation(n_samples)
             X_shuffled = X.iloc[indices]
             y_shuffled = y.iloc[indices]
@@ -92,12 +123,29 @@ def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_valu
             y_eval = y_shuffled[:eval_size]
             X_train = X_shuffled[eval_size:]
             y_train = y_shuffled[eval_size:]
+        
+        elif split_method.lower() == 'dynamic':
+            # Dynamic split: include all cases not currently used in train in the test data
+            if training_method.lower() == 'increasing':
+                # For increasing method, we'll adjust the test set as we add training samples
+                # Start with a random split
+                indices = np.random.permutation(n_samples)
+                X_shuffled = X.iloc[indices]
+                y_shuffled = y.iloc[indices]
+                
+                X_eval = X_shuffled[:eval_size]
+                y_eval = y_shuffled[:eval_size]
+                X_train = X_shuffled[eval_size:]
+                y_train = y_shuffled[eval_size:]
+            else:  # decreasing
+                # For decreasing method, start with all data as train, test will be empty initially
+                X_train = X
+                y_train = y
+                X_eval = pd.DataFrame(columns=X.columns)
+                y_eval = pd.Series(dtype=y.dtype)
+        
         else:
-            # Use provided test data
-            X_train = X
-            y_train = y
-            X_eval = X_test
-            y_eval = y_test
+            raise ValueError(f"Unsupported split method: {split_method}")
         
         # Store test set for plotting
         test_sets.append((X_eval, y_eval))
@@ -124,13 +172,33 @@ def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_valu
                     exp_accuracies.append(None)
                     continue
                 
+                # Handle dynamic split for increasing method
+                if split_method.lower() == 'dynamic':
+                    # For dynamic split, test set includes all cases not in current training subset
+                    # Find indices of samples not in current training subset
+                    train_indices = X_train.index[:i]
+                    all_indices = X.index
+                    test_indices = all_indices.difference(train_indices)
+                    
+                    if len(test_indices) > 0:
+                        X_eval_dynamic = X.loc[test_indices]
+                        y_eval_dynamic = y.loc[test_indices]
+                    else:
+                        # If no test samples, use original test set
+                        X_eval_dynamic = X_eval
+                        y_eval_dynamic = y_eval
+                else:
+                    # Use original test set for static and per-run splits
+                    X_eval_dynamic = X_eval
+                    y_eval_dynamic = y_eval
+                
                 # Get and train classifier
                 clf = get_classifier(classifier_type, k_value)
                 clf.fit(X_train_subset, y_train_subset)
                 
                 # Evaluate
-                y_pred = clf.predict(X_eval)
-                accuracy = accuracy_score(y_eval, y_pred)
+                y_pred = clf.predict(X_eval_dynamic)
+                accuracy = accuracy_score(y_eval_dynamic, y_pred)
                 exp_accuracies.append(accuracy)
                 
                 # Check if threshold is reached
@@ -153,13 +221,33 @@ def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_valu
                     exp_accuracies.append(None)
                     continue
                 
+                # Handle dynamic split for decreasing method
+                if split_method.lower() == 'dynamic':
+                    # For dynamic split, test set includes all cases not in current training subset
+                    # Find indices of samples not in current training subset
+                    train_indices = X_train.index[:i]
+                    all_indices = X.index
+                    test_indices = all_indices.difference(train_indices)
+                    
+                    if len(test_indices) > 0:
+                        X_eval_dynamic = X.loc[test_indices]
+                        y_eval_dynamic = y.loc[test_indices]
+                    else:
+                        # If no test samples, use original test set
+                        X_eval_dynamic = X_eval
+                        y_eval_dynamic = y_eval
+                else:
+                    # Use original test set for static and per-run splits
+                    X_eval_dynamic = X_eval
+                    y_eval_dynamic = y_eval
+                
                 # Get and train classifier
                 clf = get_classifier(classifier_type, k_value)
                 clf.fit(X_train_subset, y_train_subset)
                 
                 # Evaluate
-                y_pred = clf.predict(X_eval)
-                accuracy = accuracy_score(y_eval, y_pred)
+                y_pred = clf.predict(X_eval_dynamic)
+                accuracy = accuracy_score(y_eval_dynamic, y_pred)
                 exp_accuracies.append(accuracy)
                 
                 # Check if threshold is reached
@@ -196,7 +284,7 @@ def run_experiment(X, y, X_test=None, y_test=None, classifier_type='svm', k_valu
     
     return all_accuracies, threshold_reached, training_subsets, test_sets
 
-def plot_results(all_accuracies, threshold_reached, increment_size, threshold, classifier_type, training_method='increasing'):
+def plot_results(all_accuracies, threshold_reached, increment_size, threshold, classifier_type, training_method='increasing', split_method='static'):
     # Create results directory if it doesn't exist
     os.makedirs('results', exist_ok=True)
     
@@ -233,7 +321,7 @@ def plot_results(all_accuracies, threshold_reached, increment_size, threshold, c
     
     plt.xlabel('Number of Training Samples')
     plt.ylabel('Accuracy')
-    plt.title(f'{classifier_type.upper()} Accuracy vs Training Set Size ({training_method.title()} Method)')
+    plt.title(f'{classifier_type.upper()} Accuracy vs Training Set Size ({training_method.title()} Method, {split_method.title()} Split)')
     plt.legend()
     plt.grid(True)
     plt.savefig(f'results/accuracy_progression_{classifier_type.lower()}.png')
@@ -435,6 +523,8 @@ def main():
                       help='Save converged data to CSV files (default: False)')
     parser.add_argument('--training-method', type=str, choices=['increasing', 'decreasing'], default='increasing',
                       help='Training method: increasing (add cases) or decreasing (remove cases) (default: increasing)')
+    parser.add_argument('--split-method', type=str, choices=['static', 'per-run', 'dynamic'], default='static',
+                      help='Train:test split method: static (same split), per-run (new split each run), or dynamic (test includes unused cases) (default: static)')
     
     args = parser.parse_args()
     
@@ -448,12 +538,13 @@ def main():
     # Run experiments with selected classifier
     print(f"\nRunning experiments with {args.classifier.upper()}")
     print(f"Training method: {args.training_method}")
+    print(f"Split method: {args.split_method}")
     if args.classifier.lower() == 'knn':
         print(f"Using k={args.k} for KNN")
     
     all_accuracies, threshold_reached, training_subsets, test_sets = run_experiment(
         X, y, X_test, y_test, args.classifier, args.k, args.experiments, 
-        args.increment, args.threshold, args.save_converged, args.training_method
+        args.increment, args.threshold, args.save_converged, args.training_method, args.split_method
     )
     
     # Create parallel coordinates grid plot if requested
@@ -462,7 +553,7 @@ def main():
         plot_parallel_coordinates_grid(training_subsets, test_sets, args.increment, threshold_reached, args.threshold)
     
     # Plot results
-    plot_results(all_accuracies, threshold_reached, args.increment, args.threshold, args.classifier, args.training_method)
+    plot_results(all_accuracies, threshold_reached, args.increment, args.threshold, args.classifier, args.training_method, args.split_method)
     
     # Print summary statistics
     valid_accuracies = np.array([[acc if acc is not None else np.nan for acc in exp] for exp in all_accuracies])
@@ -471,6 +562,7 @@ def main():
     
     print(f"\n{args.classifier.upper()} Results:")
     print(f"Training method: {args.training_method}")
+    print(f"Split method: {args.split_method}")
     print(f"Number of experiments: {args.experiments}")
     print(f"Increment size: {args.increment}")
     print(f"Accuracy threshold: {args.threshold}")
