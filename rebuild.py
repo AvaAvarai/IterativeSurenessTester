@@ -65,6 +65,9 @@ def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, thr
     for exp in range(iterations):
         print(f"Experiment {exp + 1}/{iterations}")
         
+        # Set different random seed for each experiment to ensure different case selection
+        np.random.seed(42 + exp)
+        
         # Initialize used training subset
         used_indices = set()
         used_X = pd.DataFrame(columns=X_train.columns)
@@ -78,12 +81,41 @@ def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, thr
             current_accuracy = None
             current_metrics = {}
             
-            # Select m random cases from train
+            # Select m random cases from train using stratified sampling
             available = set(range(len(X_train))) - used_indices
             if len(available) < m:
                 selected = list(available)
             else:
-                selected = np.random.choice(list(available), m, replace=False)
+                # Get available indices and their corresponding labels
+                available_indices = list(available)
+                available_labels = y_train.iloc[available_indices]
+                
+                # Stratified sampling: ensure we maintain class balance
+                selected = []
+                unique_classes = available_labels.unique()
+                
+                # Calculate how many samples to take from each class
+                samples_per_class = m // len(unique_classes)
+                remaining_samples = m % len(unique_classes)
+                
+                for i, cls in enumerate(unique_classes):
+                    class_indices = [idx for idx, label in zip(available_indices, available_labels) if label == cls]
+                    if len(class_indices) > 0:
+                        # Take samples_per_class from this class, plus 1 extra if we have remaining samples
+                        n_samples = min(samples_per_class + (1 if i < remaining_samples else 0), len(class_indices))
+                        if n_samples > 0:
+                            class_selected = np.random.choice(class_indices, n_samples, replace=False)
+                            selected.extend(class_selected)
+                
+                # If we didn't get enough samples due to class imbalance, fill with random remaining
+                if len(selected) < m:
+                    remaining_available = [idx for idx in available_indices if idx not in selected]
+                    if len(remaining_available) > 0:
+                        additional_needed = m - len(selected)
+                        additional_selected = np.random.choice(remaining_available, 
+                                                           min(additional_needed, len(remaining_available)), 
+                                                           replace=False)
+                        selected.extend(additional_selected)
             
             # Apply action
             if action == 'additive':
@@ -132,10 +164,16 @@ def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, thr
                     with open(f'results/dt_tree_exp_{exp+1}.pkl', 'wb') as f:
                         pickle.dump(clf, f)
                 elif classifier_type == 'svm':
+                    # Save support vectors
                     sv_indices = clf.support_
                     sv_data = used_X.iloc[sv_indices].copy()
                     sv_data['class'] = used_y.iloc[sv_indices].values
                     sv_data.to_csv(f'results/sv_exp_{exp+1}.csv', index=False)
+                    
+                    # Save full converged training set
+                    conv_data = used_X.copy()
+                    conv_data['class'] = used_y.values
+                    conv_data.to_csv(f'results/converged_exp_{exp+1}.csv', index=False)
                 
                 break
             
@@ -172,6 +210,18 @@ def main():
     X_train, y_train, X_test, y_test = load_data(
         args.data, args.test_data, args.train_pct, args.test_pct
     )
+    
+    # Save train and test subsets to CSV
+    train_df = X_train.copy()
+    train_df['class'] = y_train
+    train_df.to_csv('results/train_subset.csv', index=False)
+    
+    test_df = X_test.copy()
+    test_df['class'] = y_test
+    test_df.to_csv('results/test_subset.csv', index=False)
+    
+    print(f"Training subset saved to: results/train_subset.csv ({len(X_train)} samples)")
+    print(f"Test subset saved to: results/test_subset.csv ({len(X_test)} samples)")
     
     # Prepare classifier kwargs
     classifier_kwargs = {}
