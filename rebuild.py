@@ -68,7 +68,7 @@ def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, thr
         print(f"Experiment {exp + 1}/{iterations}")
         
         # Set different random seed for each experiment to ensure different case selection
-        np.random.seed(42 + exp)
+        np.random.seed(np.random.randint(0, 2**32))
         
         # Initialize used training subset
         used_indices = set()
