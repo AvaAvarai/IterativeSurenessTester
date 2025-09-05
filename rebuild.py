@@ -11,6 +11,8 @@ import pickle
 from typing import Tuple, List, Dict, Any
 import matplotlib.pyplot as plt
 from pandas.plotting import parallel_coordinates
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
 
 def load_data(data_file: str, test_file: str = None, train_pct: float = 0.7, test_pct: float = 0.3):
     """Load and split data according to plan"""
@@ -60,132 +62,141 @@ def get_classifier(classifier_type: str, k: int = 3, metric: str = 'euclidean'):
     else:
         raise ValueError(f"Unknown classifier: {classifier_type}")
 
-def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, threshold, m, iterations, action, **classifier_kwargs):
-    """Main testing loop following the plan exactly"""
-    results = []
+def run_single_experiment(args_tuple):
+    """Run a single experiment - designed for parallel execution"""
+    (exp_num, X_train, y_train, X_test, y_test, classifier_type, threshold, m, action, classifier_kwargs) = args_tuple
     
-    for exp in range(iterations):
-        print(f"Experiment {exp + 1}/{iterations}")
+    # Set different random seed for each experiment
+    np.random.seed(np.random.randint(0, 2**31))
+    
+    # Initialize used training subset
+    used_indices = set()
+    used_X = pd.DataFrame(columns=X_train.columns)
+    used_y = pd.Series(dtype=str)
+    
+    exp_results = []
+    iteration = 0
+    
+    while len(used_indices) < len(X_train):
+        # Save current state
+        current_accuracy = None
+        current_metrics = {}
         
-        # Set different random seed for each experiment to ensure different case selection
-        np.random.seed(np.random.randint(0, 2**31))
+        # Select m random cases from train using stratified sampling
+        available = set(range(len(X_train))) - used_indices
+        if len(available) < m:
+            selected = list(available)
+        else:
+            # Get available indices and their corresponding labels
+            available_indices = list(available)
+            available_labels = y_train.iloc[available_indices]
+            
+            # Stratified sampling: ensure we maintain class balance
+            selected = []
+            unique_classes = available_labels.unique()
+            
+            # Calculate how many samples to take from each class
+            samples_per_class = m // len(unique_classes)
+            remaining_samples = m % len(unique_classes)
+            
+            for i, cls in enumerate(unique_classes):
+                class_indices = [idx for idx, label in zip(available_indices, available_labels) if label == cls]
+                if len(class_indices) > 0:
+                    # Take samples_per_class from this class, plus 1 extra if we have remaining samples
+                    n_samples = min(samples_per_class + (1 if i < remaining_samples else 0), len(class_indices))
+                    if n_samples > 0:
+                        class_selected = np.random.choice(class_indices, n_samples, replace=False)
+                        selected.extend(class_selected)
+            
+            # If we didn't get enough samples due to class imbalance, fill with random remaining
+            if len(selected) < m:
+                remaining_available = [idx for idx in available_indices if idx not in selected]
+                if len(remaining_available) > 0:
+                    additional_needed = m - len(selected)
+                    additional_selected = np.random.choice(remaining_available, 
+                                                       min(additional_needed, len(remaining_available)), 
+                                                       replace=False)
+                    selected.extend(additional_selected)
         
-        # Initialize used training subset
-        used_indices = set()
-        used_X = pd.DataFrame(columns=X_train.columns)
-        used_y = pd.Series(dtype=str)
+        # Apply action
+        if action == 'additive':
+            used_indices.update(selected)
+        else:  # subtractive
+            used_indices.difference_update(selected)
         
-        exp_results = []
-        iteration = 0
+        # Update used data
+        used_X = X_train.iloc[list(used_indices)]
+        used_y = y_train.iloc[list(used_indices)]
         
-        while len(used_indices) < len(X_train):
-            # Save current state
-            current_accuracy = None
-            current_metrics = {}
-            
-            # Select m random cases from train using stratified sampling
-            available = set(range(len(X_train))) - used_indices
-            if len(available) < m:
-                selected = list(available)
-            else:
-                # Get available indices and their corresponding labels
-                available_indices = list(available)
-                available_labels = y_train.iloc[available_indices]
-                
-                # Stratified sampling: ensure we maintain class balance
-                selected = []
-                unique_classes = available_labels.unique()
-                
-                # Calculate how many samples to take from each class
-                samples_per_class = m // len(unique_classes)
-                remaining_samples = m % len(unique_classes)
-                
-                for i, cls in enumerate(unique_classes):
-                    class_indices = [idx for idx, label in zip(available_indices, available_labels) if label == cls]
-                    if len(class_indices) > 0:
-                        # Take samples_per_class from this class, plus 1 extra if we have remaining samples
-                        n_samples = min(samples_per_class + (1 if i < remaining_samples else 0), len(class_indices))
-                        if n_samples > 0:
-                            class_selected = np.random.choice(class_indices, n_samples, replace=False)
-                            selected.extend(class_selected)
-                
-                # If we didn't get enough samples due to class imbalance, fill with random remaining
-                if len(selected) < m:
-                    remaining_available = [idx for idx in available_indices if idx not in selected]
-                    if len(remaining_available) > 0:
-                        additional_needed = m - len(selected)
-                        additional_selected = np.random.choice(remaining_available, 
-                                                           min(additional_needed, len(remaining_available)), 
-                                                           replace=False)
-                        selected.extend(additional_selected)
-            
-            # Apply action
-            if action == 'additive':
-                used_indices.update(selected)
-            else:  # subtractive
-                used_indices.difference_update(selected)
-            
-            # Update used data
-            used_X = X_train.iloc[list(used_indices)]
-            used_y = y_train.iloc[list(used_indices)]
-            
-            # Skip if not enough classes
-            if len(used_y.unique()) < 2:
-                iteration += 1
-                continue
-            
-            # Train and evaluate
-            clf = get_classifier(classifier_type, **classifier_kwargs)
-            clf.fit(used_X, used_y)
-            y_pred = clf.predict(X_test)
-            accuracy = accuracy_score(y_test, y_pred)
-            
-            # Extract metrics
-            if classifier_type == 'dt':
-                current_metrics = {'depth': clf.get_depth(), 'leaves': clf.get_n_leaves()}
-            elif classifier_type == 'knn':
-                current_metrics = {'k': clf.n_neighbors, 'metric': clf.metric}
-            elif classifier_type == 'svm':
-                current_metrics = {'support_vectors': len(clf.support_vectors_)}
-            
-            exp_results.append({
-                'iteration': iteration,
-                'used_size': len(used_indices),
-                'accuracy': accuracy,
-                'metrics': current_metrics
-            })
-            
-            print(f"  Iter {iteration}: {len(used_indices)} cases, Acc: {accuracy:.4f}")
-            
-            # Check threshold
-            if accuracy >= threshold:
-                print(f"  THRESHOLD REACHED at iteration {iteration}")
-                
-                # Save converged data
-                if classifier_type == 'dt':
-                    with open(f'results/dt_tree_exp_{exp+1}.pkl', 'wb') as f:
-                        pickle.dump(clf, f)
-                elif classifier_type == 'svm':
-                    # Save support vectors
-                    sv_indices = clf.support_
-                    sv_data = used_X.iloc[sv_indices].copy()
-                    sv_data['class'] = used_y.iloc[sv_indices].values
-                    sv_data.to_csv(f'results/sv_exp_{exp+1}.csv', index=False)
-                    
-                    # Save full converged training set
-                    conv_data = used_X.copy()
-                    conv_data['class'] = used_y.values
-                    conv_data.to_csv(f'results/converged_exp_{exp+1}.csv', index=False)
-                    
-                    # Store support vector indices in metrics for plotting
-                    current_metrics['support_vector_indices'] = sv_indices.tolist()
-                
-                break
-            
+        # Skip if not enough classes
+        if len(used_y.unique()) < 2:
             iteration += 1
+            continue
         
-        results.append(exp_results)
+        # Train and evaluate
+        clf = get_classifier(classifier_type, **classifier_kwargs)
+        clf.fit(used_X, used_y)
+        y_pred = clf.predict(X_test)
+        accuracy = accuracy_score(y_test, y_pred)
+        
+        # Extract metrics
+        if classifier_type == 'dt':
+            current_metrics = {'depth': clf.get_depth(), 'leaves': clf.get_n_leaves()}
+        elif classifier_type == 'knn':
+            current_metrics = {'k': clf.n_neighbors, 'metric': clf.metric}
+        elif classifier_type == 'svm':
+            current_metrics = {'support_vectors': len(clf.support_vectors_)}
+        
+        exp_results.append({
+            'iteration': iteration,
+            'used_size': len(used_indices),
+            'accuracy': accuracy,
+            'metrics': current_metrics
+        })
+        
+        # Check threshold
+        if accuracy >= threshold:
+            # Save converged data
+            if classifier_type == 'dt':
+                with open(f'results/dt_tree_exp_{exp_num}.pkl', 'wb') as f:
+                    pickle.dump(clf, f)
+            elif classifier_type == 'svm':
+                # Save support vectors
+                sv_indices = clf.support_
+                sv_data = used_X.iloc[sv_indices].copy()
+                sv_data['class'] = used_y.iloc[sv_indices].values
+                sv_data.to_csv(f'results/sv_exp_{exp_num}.csv', index=False)
+                
+                # Save full converged training set
+                conv_data = used_X.copy()
+                conv_data['class'] = used_y.values
+                conv_data.to_csv(f'results/converged_exp_{exp_num}.csv', index=False)
+                
+                # Store support vector indices in metrics for plotting
+                current_metrics['support_vector_indices'] = sv_indices.tolist()
+            
+            break
+        
+        iteration += 1
     
+    return exp_results
+
+def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, threshold, m, iterations, action, **classifier_kwargs):
+    """Main testing loop using parallel execution"""
+    print(f"Running {iterations} experiments in parallel...")
+    
+    # Prepare arguments for parallel execution
+    args_list = []
+    for exp in range(iterations):
+        args_tuple = (exp + 1, X_train, y_train, X_test, y_test, classifier_type, threshold, m, action, classifier_kwargs)
+        args_list.append(args_tuple)
+    
+    # Run experiments in parallel
+    max_workers = min(multiprocessing.cpu_count(), iterations)
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(run_single_experiment, args_list))
+    
+    print(f"Completed {iterations} experiments")
     return results
 
 def plot_svm_cases_vs_support_vectors(all_results):
@@ -345,9 +356,9 @@ def main():
         print(f"\nStatistics:")
         print(f"Average iterations needed: {np.mean(iterations_needed):.1f}")
         print(f"Average cases needed: {np.mean(cases_needed):.1f}")
-        print(f"Standard deviation of cases needed: {np.std(cases_needed):.1f}")
         print(f"Min cases needed: {min(cases_needed)}")
         print(f"Max cases needed: {max(cases_needed)}")
+        print(f"Standard deviation of cases needed: {np.std(cases_needed):.1f}")
         
         # SVM-specific statistics
         if args.classifier == 'svm':
