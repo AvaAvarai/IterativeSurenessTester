@@ -9,6 +9,8 @@ import argparse
 import os
 import pickle
 from typing import Tuple, List, Dict, Any
+import matplotlib.pyplot as plt
+from pandas.plotting import parallel_coordinates
 
 def load_data(data_file: str, test_file: str = None, train_pct: float = 0.7, test_pct: float = 0.3):
     """Load and split data according to plan"""
@@ -174,6 +176,9 @@ def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, thr
                     conv_data = used_X.copy()
                     conv_data['class'] = used_y.values
                     conv_data.to_csv(f'results/converged_exp_{exp+1}.csv', index=False)
+                    
+                    # Store support vector indices in metrics for plotting
+                    current_metrics['support_vector_indices'] = sv_indices.tolist()
                 
                 break
             
@@ -182,6 +187,57 @@ def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, thr
         results.append(exp_results)
     
     return results
+
+def plot_svm_cases_vs_support_vectors(all_results):
+    """Create parallel coordinates plot showing cases and support vectors per experiment"""
+    if not all_results:
+        return
+    
+    # Extract data for plotting
+    experiments = []
+    cases = []
+    support_vectors = []
+    
+    for exp_idx, exp_results in enumerate(all_results):
+        for iter_result in exp_results:
+            if iter_result['accuracy'] >= 0.95:  # threshold reached
+                experiments.append(exp_idx + 1)
+                cases.append(iter_result['used_size'])
+                support_vectors.append(iter_result['metrics'].get('support_vectors', 0))
+                break
+    
+    if not experiments:
+        return
+    
+    # Create the parallel coordinates plot - width scales with number of experiments
+    width = max(20, len(experiments) * 0.3)  # At least 20 inches, or 0.3 inches per experiment
+    fig, ax = plt.subplots(figsize=(width, 8))
+    
+    # Create the parallel coordinates
+    x_pos = np.arange(len(experiments))
+    
+    # Plot support vectors polyline first (behind)
+    ax.plot(x_pos, support_vectors, 's-', linewidth=2, markersize=8, label='Number of Support Vectors', color='red')
+    
+    # Plot cases polyline second (in front)
+    ax.plot(x_pos, cases, 'o-', linewidth=2, markersize=8, label='Number of Cases', color='blue')
+    
+    # Set x-axis
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels([f'{exp}' for exp in experiments])
+    
+    # Labels and title
+    ax.set_xlabel('Experiment Number')
+    ax.set_ylabel('Count')
+    ax.set_title('SVM: Cases vs Support Vectors per Experiment (Parallel Coordinates)')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # Save plot
+    plt.savefig('results/svm_cases_vs_support_vectors.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Parallel coordinates plot saved: results/svm_cases_vs_support_vectors.png")
 
 def main():
     parser = argparse.ArgumentParser(description='Iterative Sureness Testing')
@@ -235,6 +291,11 @@ def main():
         **classifier_kwargs
     )
     
+    # Create cases vs support vectors plot for SVM
+    if args.classifier == 'svm':
+        print("\nCreating cases vs support vectors plot for SVM...")
+        plot_svm_cases_vs_support_vectors(results)
+    
     # Save results
     import json
     with open('results/results.json', 'w') as f:
@@ -284,8 +345,18 @@ def main():
         print(f"\nStatistics:")
         print(f"Average iterations needed: {np.mean(iterations_needed):.1f}")
         print(f"Average cases needed: {np.mean(cases_needed):.1f}")
+        print(f"Standard deviation of cases needed: {np.std(cases_needed):.1f}")
         print(f"Min cases needed: {min(cases_needed)}")
         print(f"Max cases needed: {max(cases_needed)}")
+        
+        # SVM-specific statistics
+        if args.classifier == 'svm':
+            support_vectors_needed = [conv['support_vectors'] for conv in converged_experiments]
+            print(f"\nSVM Support Vector Statistics:")
+            print(f"Average support vectors needed: {np.mean(support_vectors_needed):.1f}")
+            print(f"Min support vectors needed: {min(support_vectors_needed)}")
+            print(f"Max support vectors needed: {max(support_vectors_needed)}")
+            print(f"Standard deviation of support vectors: {np.std(support_vectors_needed):.1f}")
     else:
         print("No experiments reached the threshold!")
     
