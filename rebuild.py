@@ -38,7 +38,7 @@ def load_data(data_file: str, test_file: str = None, train_pct: float = 0.7, tes
         test_size = n_samples - train_size
         
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, train_size=train_size, test_size=test_size, random_state=42, stratify=y
+            X, y, train_size=train_size, test_size=test_size, random_state=np.random.randint(0, 2**31), stratify=y
         )
     
     # Normalize
@@ -52,11 +52,11 @@ def load_data(data_file: str, test_file: str = None, train_pct: float = 0.7, tes
 def get_classifier(classifier_type: str, k: int = 3, metric: str = 'euclidean'):
     """Get classifier instance"""
     if classifier_type == 'dt':
-        return DecisionTreeClassifier(random_state=42)
+        return DecisionTreeClassifier(random_state=np.random.randint(0, 2**31))
     elif classifier_type == 'knn':
         return KNeighborsClassifier(n_neighbors=k, metric=metric)
     elif classifier_type == 'svm':
-        return SVC(kernel='rbf', random_state=42)
+        return SVC(kernel='rbf', random_state=np.random.randint(0, 2**31))
     else:
         raise ValueError(f"Unknown classifier: {classifier_type}")
 
@@ -68,7 +68,7 @@ def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, thr
         print(f"Experiment {exp + 1}/{iterations}")
         
         # Set different random seed for each experiment to ensure different case selection
-        np.random.seed(np.random.randint(0, 2**32))
+        np.random.seed(np.random.randint(0, 2**31))
         
         # Initialize used training subset
         used_indices = set()
