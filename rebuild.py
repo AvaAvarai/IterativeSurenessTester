@@ -82,6 +82,29 @@ def get_classifier(classifier_type: str, k: int = 3, metric: str = 'euclidean'):
     else:
         raise ValueError(f"Unknown classifier: {classifier_type}")
 
+def get_class_distribution(y_series):
+    """Get class distribution as a dictionary"""
+    return y_series.value_counts().to_dict()
+
+def format_class_distribution(class_dist):
+    """Format class distribution for display with class names"""
+    if not class_dist:
+        return "N/A"
+    return ", ".join([f"{cls}({count})" for cls, count in sorted(class_dist.items())])
+
+def find_min_max_experiments(experiments, metric_key):
+    """Find experiments with min and max values for a given metric"""
+    if not experiments:
+        return None, None, None, None
+    
+    min_val = min(exp[metric_key] for exp in experiments)
+    max_val = max(exp[metric_key] for exp in experiments)
+    
+    min_exp = next(exp for exp in experiments if exp[metric_key] == min_val)
+    max_exp = next(exp for exp in experiments if exp[metric_key] == max_val)
+    
+    return min_val, max_val, min_exp, max_exp
+
 def run_single_experiment(args_tuple):
     """Run a single experiment - designed for parallel execution"""
     (exp_num, X_train, y_train, X_test, y_test, classifier_type, threshold, m, action, classifier_kwargs, split_dir) = args_tuple
@@ -102,41 +125,14 @@ def run_single_experiment(args_tuple):
         current_accuracy = None
         current_metrics = {}
         
-        # Select m random cases from train using stratified sampling
+        # Select m random cases from available training data
         available = set(range(len(X_train))) - used_indices
         if len(available) < m:
             selected = list(available)
         else:
-            # Get available indices and their corresponding labels
             available_indices = list(available)
-            available_labels = y_train.iloc[available_indices]
-            
-            # Stratified sampling: ensure we maintain class balance
-            selected = []
-            unique_classes = available_labels.unique()
-            
-            # Calculate how many samples to take from each class
-            samples_per_class = m // len(unique_classes)
-            remaining_samples = m % len(unique_classes)
-            
-            for i, cls in enumerate(unique_classes):
-                class_indices = [idx for idx, label in zip(available_indices, available_labels) if label == cls]
-                if len(class_indices) > 0:
-                    # Take samples_per_class from this class, plus 1 extra if we have remaining samples
-                    n_samples = min(samples_per_class + (1 if i < remaining_samples else 0), len(class_indices))
-                    if n_samples > 0:
-                        class_selected = np.random.choice(class_indices, n_samples, replace=False)
-                        selected.extend(class_selected)
-            
-            # If we didn't get enough samples due to class imbalance, fill with random remaining
-            if len(selected) < m:
-                remaining_available = [idx for idx in available_indices if idx not in selected]
-                if len(remaining_available) > 0:
-                    additional_needed = m - len(selected)
-                    additional_selected = np.random.choice(remaining_available, 
-                                                       min(additional_needed, len(remaining_available)), 
-                                                       replace=False)
-                    selected.extend(additional_selected)
+            # Random sampling from available cases (preserves natural class distribution)
+            selected = np.random.choice(available_indices, m, replace=False).tolist()
         
         # Apply action
         if action == 'additive':
@@ -171,7 +167,8 @@ def run_single_experiment(args_tuple):
             'iteration': iteration,
             'used_size': len(used_indices),
             'accuracy': accuracy,
-            'metrics': current_metrics
+            'metrics': current_metrics,
+            'class_distribution': get_class_distribution(used_y)
         })
         
         # Check threshold
@@ -306,6 +303,7 @@ def main():
     # Store all results across splits
     all_splits_results = []
     all_converged_experiments = []
+    split_info_list = []  # Store split class distribution info
     used_splits = set()  # Track used splits to avoid duplicates
     
     print(f"Running {args.splits} split(s) with {args.iterations} experiments each...")
@@ -335,8 +333,22 @@ def main():
         test_df['class'] = y_test
         test_df.to_csv(f'{split_dir}/test_subset.csv', index=False)
         
+        # Calculate and display class distributions
+        train_class_dist = get_class_distribution(y_train)
+        test_class_dist = get_class_distribution(y_test)
+        
         print(f"Training subset saved to: {split_dir}/train_subset.csv ({len(X_train)} samples)")
+        print(f"  Training class distribution: {format_class_distribution(train_class_dist)}")
         print(f"Test subset saved to: {split_dir}/test_subset.csv ({len(X_test)} samples)")
+        print(f"  Test class distribution: {format_class_distribution(test_class_dist)}")
+        
+        # Store split class distributions for final summary
+        split_info = {
+            'split_num': split_num,
+            'train_class_dist': train_class_dist,
+            'test_class_dist': test_class_dist
+        }
+        split_info_list.append(split_info)
         
         # Run testing for this split
         split_results = run_iterative_testing(
@@ -357,13 +369,16 @@ def main():
                     if args.classifier == 'svm':
                         sv_count = iter_result['metrics'].get('support_vectors', 'N/A')
                     
+                    # Get class distribution for this converged experiment
+                    class_dist = iter_result.get('class_distribution', {})
                     experiment_data = {
                         'split': split_num,
                         'experiment': exp_idx + 1,
                         'iteration': iter_result['iteration'],
                         'cases_needed': iter_result['used_size'],
                         'accuracy': iter_result['accuracy'],
-                        'support_vectors': sv_count
+                        'support_vectors': sv_count,
+                        'class_distribution': class_dist
                     }
                     split_converged_experiments.append(experiment_data)
                     all_converged_experiments.append(experiment_data)
@@ -380,16 +395,22 @@ def main():
             print(f"Split {split_num} Statistics:")
             print(f"  Average iterations needed: {np.mean(split_iterations):.1f}")
             print(f"  Average cases needed: {np.mean(split_cases):.1f}")
-            print(f"  Min cases needed: {min(split_cases)}")
-            print(f"  Max cases needed: {max(split_cases)}")
+            
+            # Min/Max cases with class distribution and accuracy
+            min_cases, max_cases, min_exp, max_exp = find_min_max_experiments(split_converged_experiments, 'cases_needed')
+            print(f"  Min cases needed: {min_cases} (class dist: {format_class_distribution(min_exp['class_distribution'])}, accuracy: {min_exp['accuracy']:.3f})")
+            print(f"  Max cases needed: {max_cases} (class dist: {format_class_distribution(max_exp['class_distribution'])}, accuracy: {max_exp['accuracy']:.3f})")
             print(f"  Standard deviation of cases needed: {np.std(split_cases):.1f}")
             
             # SVM-specific statistics for this split
             if args.classifier == 'svm':
                 split_support_vectors = [conv['support_vectors'] for conv in split_converged_experiments]
                 print(f"  Average support vectors needed: {np.mean(split_support_vectors):.1f}")
-                print(f"  Min support vectors needed: {min(split_support_vectors)}")
-                print(f"  Max support vectors needed: {max(split_support_vectors)}")
+                
+                # Min/Max support vectors with class distribution and accuracy
+                min_sv, max_sv, min_sv_exp, max_sv_exp = find_min_max_experiments(split_converged_experiments, 'support_vectors')
+                print(f"  Min support vectors needed: {min_sv} (class dist: {format_class_distribution(min_sv_exp['class_distribution'])}, accuracy: {min_sv_exp['accuracy']:.3f})")
+                print(f"  Max support vectors needed: {max_sv} (class dist: {format_class_distribution(max_sv_exp['class_distribution'])}, accuracy: {max_sv_exp['accuracy']:.3f})")
                 print(f"  Standard deviation of support vectors: {np.std(split_support_vectors):.1f}")
         else:
             print(f"Split {split_num} - No experiments reached the threshold!")
@@ -418,8 +439,11 @@ def main():
         print(f"\nOverall Statistics:")
         print(f"Average iterations needed: {np.mean(all_iterations):.1f}")
         print(f"Average cases needed: {np.mean(all_cases):.1f}")
-        print(f"Min cases needed: {min(all_cases)}")
-        print(f"Max cases needed: {max(all_cases)}")
+        
+        # Min/Max cases with class distribution and accuracy
+        min_cases, max_cases, min_exp, max_exp = find_min_max_experiments(all_converged_experiments, 'cases_needed')
+        print(f"Min cases needed: {min_cases} (class dist: {format_class_distribution(min_exp['class_distribution'])}, accuracy: {min_exp['accuracy']:.3f})")
+        print(f"Max cases needed: {max_cases} (class dist: {format_class_distribution(max_exp['class_distribution'])}, accuracy: {max_exp['accuracy']:.3f})")
         print(f"Standard deviation of cases needed: {np.std(all_cases):.1f}")
         
         # SVM-specific overall statistics
@@ -427,29 +451,49 @@ def main():
             all_support_vectors = [conv['support_vectors'] for conv in all_converged_experiments]
             print(f"\nOverall SVM Support Vector Statistics:")
             print(f"Average support vectors needed: {np.mean(all_support_vectors):.1f}")
-            print(f"Min support vectors needed: {min(all_support_vectors)}")
-            print(f"Max support vectors needed: {max(all_support_vectors)}")
+            
+            # Min/Max support vectors with class distribution and accuracy
+            min_sv, max_sv, min_sv_exp, max_sv_exp = find_min_max_experiments(all_converged_experiments, 'support_vectors')
+            print(f"Min support vectors needed: {min_sv} (class dist: {format_class_distribution(min_sv_exp['class_distribution'])}, accuracy: {min_sv_exp['accuracy']:.3f})")
+            print(f"Max support vectors needed: {max_sv} (class dist: {format_class_distribution(max_sv_exp['class_distribution'])}, accuracy: {max_sv_exp['accuracy']:.3f})")
             print(f"Standard deviation of support vectors: {np.std(all_support_vectors):.1f}")
         
         # Per-split summary
         print(f"\nPer-Split Summary:")
         for split_num in range(1, args.splits + 1):
             split_experiments = [conv for conv in all_converged_experiments if conv['split'] == split_num]
+            split_info = next((info for info in split_info_list if info['split_num'] == split_num), None)
+            
             if split_experiments:
                 split_cases = [conv['cases_needed'] for conv in split_experiments]
                 if args.classifier == 'svm':
                     split_support_vectors = [conv['support_vectors'] for conv in split_experiments]
+                    min_cases, max_cases, min_exp, max_exp = find_min_max_experiments(split_experiments, 'cases_needed')
+                    min_sv, max_sv, min_sv_exp, max_sv_exp = find_min_max_experiments(split_experiments, 'support_vectors')
                     print(f"Split {split_num}: {len(split_experiments)}/{args.iterations} converged, "
                           f"avg cases: {np.mean(split_cases):.1f}, "
-                          f"min: {min(split_cases)}, max: {max(split_cases)}, "
+                          f"min: {min_cases} ({format_class_distribution(min_exp['class_distribution'])}, acc: {min_exp['accuracy']:.3f}), "
+                          f"max: {max_cases} ({format_class_distribution(max_exp['class_distribution'])}, acc: {max_exp['accuracy']:.3f}), "
                           f"avg SV: {np.mean(split_support_vectors):.1f}, "
-                          f"min SV: {min(split_support_vectors)}, max SV: {max(split_support_vectors)}")
+                          f"min SV: {min_sv} ({format_class_distribution(min_sv_exp['class_distribution'])}, acc: {min_sv_exp['accuracy']:.3f}), "
+                          f"max SV: {max_sv} ({format_class_distribution(max_sv_exp['class_distribution'])}, acc: {max_sv_exp['accuracy']:.3f})")
+                    if split_info:
+                        print(f"  Train dist: {format_class_distribution(split_info['train_class_dist'])}, "
+                              f"Test dist: {format_class_distribution(split_info['test_class_dist'])}")
                 else:
+                    min_cases, max_cases, min_exp, max_exp = find_min_max_experiments(split_experiments, 'cases_needed')
                     print(f"Split {split_num}: {len(split_experiments)}/{args.iterations} converged, "
                           f"avg cases: {np.mean(split_cases):.1f}, "
-                          f"min: {min(split_cases)}, max: {max(split_cases)}")
+                          f"min: {min_cases} ({format_class_distribution(min_exp['class_distribution'])}, acc: {min_exp['accuracy']:.3f}), "
+                          f"max: {max_cases} ({format_class_distribution(max_exp['class_distribution'])}, acc: {max_exp['accuracy']:.3f})")
+                    if split_info:
+                        print(f"  Train dist: {format_class_distribution(split_info['train_class_dist'])}, "
+                              f"Test dist: {format_class_distribution(split_info['test_class_dist'])}")
             else:
                 print(f"Split {split_num}: 0/{args.iterations} converged")
+                if split_info:
+                    print(f"  Train dist: {format_class_distribution(split_info['train_class_dist'])}, "
+                          f"Test dist: {format_class_distribution(split_info['test_class_dist'])}")
     else:
         print("No experiments reached the threshold across all splits!")
     
