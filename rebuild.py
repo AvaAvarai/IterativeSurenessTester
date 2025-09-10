@@ -15,7 +15,7 @@ from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
 from datetime import datetime
 
-def load_data(data_file: str, test_file: str = None, train_pct: float = 0.7, test_pct: float = 0.3):
+def load_data(data_file: str, test_file: str = None, train_pct: float = 0.7, test_pct: float = 0.3, used_splits: set = None):
     """Load and split data according to plan"""
     if test_file:
         # Pre-split data
@@ -40,9 +40,28 @@ def load_data(data_file: str, test_file: str = None, train_pct: float = 0.7, tes
         train_size = int(round(train_pct * n_samples))
         test_size = n_samples - train_size
         
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, train_size=train_size, test_size=test_size, random_state=np.random.randint(0, 2**31), stratify=y
-        )
+        # Keep trying different random seeds until we get a unique split
+        max_attempts = 1000
+        for attempt in range(max_attempts):
+            random_seed = np.random.randint(0, 2**31)
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, train_size=train_size, test_size=test_size, random_state=random_seed, stratify=y
+            )
+            
+            # Create a hash of the split to check for uniqueness
+            if used_splits is not None:
+                # Create a simple hash based on the indices of train/test samples
+                train_indices = set(X_train.index)
+                test_indices = set(X_test.index)
+                split_hash = hash(frozenset(train_indices))
+                
+                if split_hash not in used_splits:
+                    used_splits.add(split_hash)
+                    break
+            else:
+                break
+        else:
+            print(f"Warning: Could not find unique split after {max_attempts} attempts")
     
     # Normalize
     min_vals = X_train.min()
@@ -287,6 +306,7 @@ def main():
     # Store all results across splits
     all_splits_results = []
     all_converged_experiments = []
+    used_splits = set()  # Track used splits to avoid duplicates
     
     print(f"Running {args.splits} split(s) with {args.iterations} experiments each...")
     print(f"Results will be saved to: {exp_dir}")
@@ -296,10 +316,10 @@ def main():
         print(f"\nSPLIT {split_num}/{args.splits}")
         print("-" * 40)
         
-        # Load data for this split (fresh random seed for each split)
-        print(f"Loading data for split {split_num} with fresh random seed...")
+        # Load data for this split (ensure unique split)
+        print(f"Loading data for split {split_num} (ensuring unique split)...")
         X_train, y_train, X_test, y_test = load_data(
-            args.data, args.test_data, args.train_pct, args.test_pct
+            args.data, args.test_data, args.train_pct, args.test_pct, used_splits
         )
         
         # Create subfolder for this split
