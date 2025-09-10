@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from pandas.plotting import parallel_coordinates
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
+from datetime import datetime
 
 def load_data(data_file: str, test_file: str = None, train_pct: float = 0.7, test_pct: float = 0.3):
     """Load and split data according to plan"""
@@ -64,7 +65,7 @@ def get_classifier(classifier_type: str, k: int = 3, metric: str = 'euclidean'):
 
 def run_single_experiment(args_tuple):
     """Run a single experiment - designed for parallel execution"""
-    (exp_num, X_train, y_train, X_test, y_test, classifier_type, threshold, m, action, classifier_kwargs) = args_tuple
+    (exp_num, X_train, y_train, X_test, y_test, classifier_type, threshold, m, action, classifier_kwargs, split_dir) = args_tuple
     
     # Set different random seed for each experiment
     np.random.seed(np.random.randint(0, 2**31))
@@ -158,19 +159,19 @@ def run_single_experiment(args_tuple):
         if accuracy >= threshold:
             # Save converged data
             if classifier_type == 'dt':
-                with open(f'results/dt_tree_exp_{exp_num}.pkl', 'wb') as f:
+                with open(f'{split_dir}/dt_tree_exp_{exp_num}.pkl', 'wb') as f:
                     pickle.dump(clf, f)
             elif classifier_type == 'svm':
                 # Save support vectors
                 sv_indices = clf.support_
                 sv_data = used_X.iloc[sv_indices].copy()
                 sv_data['class'] = used_y.iloc[sv_indices].values
-                sv_data.to_csv(f'results/sv_exp_{exp_num}.csv', index=False)
+                sv_data.to_csv(f'{split_dir}/sv_exp_{exp_num}.csv', index=False)
                 
                 # Save full converged training set
                 conv_data = used_X.copy()
                 conv_data['class'] = used_y.values
-                conv_data.to_csv(f'results/converged_exp_{exp_num}.csv', index=False)
+                conv_data.to_csv(f'{split_dir}/converged_exp_{exp_num}.csv', index=False)
                 
                 # Store support vector indices in metrics for plotting
                 current_metrics['support_vector_indices'] = sv_indices.tolist()
@@ -181,14 +182,14 @@ def run_single_experiment(args_tuple):
     
     return exp_results
 
-def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, threshold, m, iterations, action, **classifier_kwargs):
+def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, threshold, m, iterations, action, split_dir, **classifier_kwargs):
     """Main testing loop using parallel execution"""
     print(f"Running {iterations} experiments in parallel...")
     
     # Prepare arguments for parallel execution
     args_list = []
     for exp in range(iterations):
-        args_tuple = (exp + 1, X_train, y_train, X_test, y_test, classifier_type, threshold, m, action, classifier_kwargs)
+        args_tuple = (exp + 1, X_train, y_train, X_test, y_test, classifier_type, threshold, m, action, classifier_kwargs, split_dir)
         args_list.append(args_tuple)
     
     # Run experiments in parallel
@@ -199,7 +200,7 @@ def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, thr
     print(f"Completed {iterations} experiments")
     return results
 
-def plot_svm_cases_vs_support_vectors(all_results):
+def plot_svm_cases_vs_support_vectors(all_results, exp_dir):
     """Create parallel coordinates plot showing cases and support vectors per experiment"""
     if not all_results:
         return
@@ -245,10 +246,11 @@ def plot_svm_cases_vs_support_vectors(all_results):
     ax.grid(True, alpha=0.3)
     
     # Save plot
-    plt.savefig('results/svm_cases_vs_support_vectors.png', dpi=300, bbox_inches='tight')
+    plot_path = f'{exp_dir}/svm_cases_vs_support_vectors.png'
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"Parallel coordinates plot saved: results/svm_cases_vs_support_vectors.png")
+    print(f"Parallel coordinates plot saved: {plot_path}")
 
 def main():
     parser = argparse.ArgumentParser(description='Iterative Sureness Testing')
@@ -261,8 +263,10 @@ def main():
     parser.add_argument('--metric', default='euclidean', help='Distance metric for KNN')
     parser.add_argument('--threshold', type=float, default=0.95, help='Accuracy threshold')
     parser.add_argument('--m', type=int, default=5, help='Cases per iteration')
-    parser.add_argument('--iterations', type=int, default=10, help='Number of experiments')
+    parser.add_argument('--iterations', type=int, default=10, help='Number of experiments per split')
+    parser.add_argument('--splits', type=int, default=1, help='Number of splits to test')
     parser.add_argument('--action', choices=['additive', 'subtractive'], default='additive', help='Action type')
+    parser.add_argument('--plot', action='store_true', help='Create plots (default: False)')
     
     args = parser.parse_args()
     
@@ -270,108 +274,166 @@ def main():
     if abs(args.train_pct + args.test_pct - 1.0) > 1e-6:
         parser.error("train_pct + test_pct must equal 1.0")
     
-    # Create results directory
-    os.makedirs('results', exist_ok=True)
-    
-    # Load data
-    X_train, y_train, X_test, y_test = load_data(
-        args.data, args.test_data, args.train_pct, args.test_pct
-    )
-    
-    # Save train and test subsets to CSV
-    train_df = X_train.copy()
-    train_df['class'] = y_train
-    train_df.to_csv('results/train_subset.csv', index=False)
-    
-    test_df = X_test.copy()
-    test_df['class'] = y_test
-    test_df.to_csv('results/test_subset.csv', index=False)
-    
-    print(f"Training subset saved to: results/train_subset.csv ({len(X_train)} samples)")
-    print(f"Test subset saved to: results/test_subset.csv ({len(X_test)} samples)")
+    # Create timestamped experiment directory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    exp_dir = f'results/exp_{timestamp}'
+    os.makedirs(exp_dir, exist_ok=True)
     
     # Prepare classifier kwargs
     classifier_kwargs = {}
     if args.classifier == 'knn':
         classifier_kwargs = {'k': args.k, 'metric': args.metric}
     
-    # Run testing
-    results = run_iterative_testing(
-        X_train, y_train, X_test, y_test,
-        args.classifier, args.threshold, args.m, args.iterations, args.action,
-        **classifier_kwargs
-    )
+    # Store all results across splits
+    all_splits_results = []
+    all_converged_experiments = []
     
-    # Create cases vs support vectors plot for SVM
-    if args.classifier == 'svm':
-        print("\nCreating cases vs support vectors plot for SVM...")
-        plot_svm_cases_vs_support_vectors(results)
+    print(f"Running {args.splits} split(s) with {args.iterations} experiments each...")
+    print(f"Results will be saved to: {exp_dir}")
+    print("="*80)
     
-    # Save results
-    import json
-    with open('results/results.json', 'w') as f:
-        json.dump(results, f, indent=2, default=str)
-    
-    print(f"\nResults saved to results/")
-    
-    # Print summary of experiments that reached threshold
-    print("\n" + "="*60)
-    print("EXPERIMENTS THAT REACHED THRESHOLD")
-    print("="*60)
-    
-    converged_experiments = []
-    for exp_idx, exp_results in enumerate(results):
-        for iter_result in exp_results:
-            if iter_result['accuracy'] >= args.threshold:
-                # Get additional metrics for SVM
-                sv_count = None
-                if args.classifier == 'svm':
-                    sv_count = iter_result['metrics'].get('support_vectors', 'N/A')
-                
-                converged_experiments.append({
-                    'experiment': exp_idx + 1,
-                    'iteration': iter_result['iteration'],
-                    'cases_needed': iter_result['used_size'],
-                    'accuracy': iter_result['accuracy'],
-                    'support_vectors': sv_count
-                })
-                break
-    
-    if converged_experiments:
-        print(f"Total experiments that converged: {len(converged_experiments)}/{args.iterations}")
-        print("\nIterations and Cases Needed:")
-        if args.classifier == 'svm':
-            print("-" * 60)
-            for conv in converged_experiments:
-                print(f"Experiment {conv['experiment']:2d}: Iteration {conv['iteration']:2d}, Cases: {conv['cases_needed']:3d}, Accuracy: {conv['accuracy']:.4f}, Support Vectors: {conv['support_vectors']}")
+    for split_num in range(1, args.splits + 1):
+        print(f"\nSPLIT {split_num}/{args.splits}")
+        print("-" * 40)
+        
+        # Load data for this split (fresh random seed for each split)
+        print(f"Loading data for split {split_num} with fresh random seed...")
+        X_train, y_train, X_test, y_test = load_data(
+            args.data, args.test_data, args.train_pct, args.test_pct
+        )
+        
+        # Create subfolder for this split
+        split_dir = f'{exp_dir}/split_{split_num}'
+        os.makedirs(split_dir, exist_ok=True)
+        
+        # Save train and test subsets to CSV for this split
+        train_df = X_train.copy()
+        train_df['class'] = y_train
+        train_df.to_csv(f'{split_dir}/train_subset.csv', index=False)
+        
+        test_df = X_test.copy()
+        test_df['class'] = y_test
+        test_df.to_csv(f'{split_dir}/test_subset.csv', index=False)
+        
+        print(f"Training subset saved to: {split_dir}/train_subset.csv ({len(X_train)} samples)")
+        print(f"Test subset saved to: {split_dir}/test_subset.csv ({len(X_test)} samples)")
+        
+        # Run testing for this split
+        split_results = run_iterative_testing(
+            X_train, y_train, X_test, y_test,
+            args.classifier, args.threshold, args.m, args.iterations, args.action, split_dir,
+            **classifier_kwargs
+        )
+        
+        all_splits_results.append(split_results)
+        
+        # Process results for this split
+        split_converged_experiments = []
+        for exp_idx, exp_results in enumerate(split_results):
+            for iter_result in exp_results:
+                if iter_result['accuracy'] >= args.threshold:
+                    # Get additional metrics for SVM
+                    sv_count = None
+                    if args.classifier == 'svm':
+                        sv_count = iter_result['metrics'].get('support_vectors', 'N/A')
+                    
+                    experiment_data = {
+                        'split': split_num,
+                        'experiment': exp_idx + 1,
+                        'iteration': iter_result['iteration'],
+                        'cases_needed': iter_result['used_size'],
+                        'accuracy': iter_result['accuracy'],
+                        'support_vectors': sv_count
+                    }
+                    split_converged_experiments.append(experiment_data)
+                    all_converged_experiments.append(experiment_data)
+                    break
+        
+        # Print split-specific results
+        if split_converged_experiments:
+            print(f"Split {split_num} - Experiments that converged: {len(split_converged_experiments)}/{args.iterations}")
+            
+            # Calculate split statistics
+            split_iterations = [conv['iteration'] for conv in split_converged_experiments]
+            split_cases = [conv['cases_needed'] for conv in split_converged_experiments]
+            
+            print(f"Split {split_num} Statistics:")
+            print(f"  Average iterations needed: {np.mean(split_iterations):.1f}")
+            print(f"  Average cases needed: {np.mean(split_cases):.1f}")
+            print(f"  Min cases needed: {min(split_cases)}")
+            print(f"  Max cases needed: {max(split_cases)}")
+            print(f"  Standard deviation of cases needed: {np.std(split_cases):.1f}")
+            
+            # SVM-specific statistics for this split
+            if args.classifier == 'svm':
+                split_support_vectors = [conv['support_vectors'] for conv in split_converged_experiments]
+                print(f"  Average support vectors needed: {np.mean(split_support_vectors):.1f}")
+                print(f"  Min support vectors needed: {min(split_support_vectors)}")
+                print(f"  Max support vectors needed: {max(split_support_vectors)}")
+                print(f"  Standard deviation of support vectors: {np.std(split_support_vectors):.1f}")
         else:
-            print("-" * 40)
-            for conv in converged_experiments:
-                print(f"Experiment {conv['experiment']:2d}: Iteration {conv['iteration']:2d}, Cases: {conv['cases_needed']:3d}, Accuracy: {conv['accuracy']:.4f}")
-        
-        # Calculate statistics
-        iterations_needed = [conv['iteration'] for conv in converged_experiments]
-        cases_needed = [conv['cases_needed'] for conv in converged_experiments]
-        
-        print(f"\nStatistics:")
-        print(f"Average iterations needed: {np.mean(iterations_needed):.1f}")
-        print(f"Average cases needed: {np.mean(cases_needed):.1f}")
-        print(f"Min cases needed: {min(cases_needed)}")
-        print(f"Max cases needed: {max(cases_needed)}")
-        print(f"Standard deviation of cases needed: {np.std(cases_needed):.1f}")
-        
-        # SVM-specific statistics
-        if args.classifier == 'svm':
-            support_vectors_needed = [conv['support_vectors'] for conv in converged_experiments]
-            print(f"\nSVM Support Vector Statistics:")
-            print(f"Average support vectors needed: {np.mean(support_vectors_needed):.1f}")
-            print(f"Min support vectors needed: {min(support_vectors_needed)}")
-            print(f"Max support vectors needed: {max(support_vectors_needed)}")
-            print(f"Standard deviation of support vectors: {np.std(support_vectors_needed):.1f}")
-    else:
-        print("No experiments reached the threshold!")
+            print(f"Split {split_num} - No experiments reached the threshold!")
     
-    print("="*60)
+    # Create cases vs support vectors plot for SVM (using all splits data)
+    if args.plot and args.classifier == 'svm':
+        print("\nCreating cases vs support vectors plot for SVM...")
+        # Flatten all results for plotting
+        all_results_flat = []
+        for split_results in all_splits_results:
+            all_results_flat.extend(split_results)
+        plot_svm_cases_vs_support_vectors(all_results_flat, exp_dir)
+    
+    # Print overall summary across all splits
+    print("\n" + "="*80)
+    print("OVERALL SUMMARY ACROSS ALL SPLITS")
+    print("="*80)
+    
+    if all_converged_experiments:
+        print(f"Total experiments that converged: {len(all_converged_experiments)}/{args.splits * args.iterations}")
+        
+        # Calculate overall statistics
+        all_iterations = [conv['iteration'] for conv in all_converged_experiments]
+        all_cases = [conv['cases_needed'] for conv in all_converged_experiments]
+        
+        print(f"\nOverall Statistics:")
+        print(f"Average iterations needed: {np.mean(all_iterations):.1f}")
+        print(f"Average cases needed: {np.mean(all_cases):.1f}")
+        print(f"Min cases needed: {min(all_cases)}")
+        print(f"Max cases needed: {max(all_cases)}")
+        print(f"Standard deviation of cases needed: {np.std(all_cases):.1f}")
+        
+        # SVM-specific overall statistics
+        if args.classifier == 'svm':
+            all_support_vectors = [conv['support_vectors'] for conv in all_converged_experiments]
+            print(f"\nOverall SVM Support Vector Statistics:")
+            print(f"Average support vectors needed: {np.mean(all_support_vectors):.1f}")
+            print(f"Min support vectors needed: {min(all_support_vectors)}")
+            print(f"Max support vectors needed: {max(all_support_vectors)}")
+            print(f"Standard deviation of support vectors: {np.std(all_support_vectors):.1f}")
+        
+        # Per-split summary
+        print(f"\nPer-Split Summary:")
+        for split_num in range(1, args.splits + 1):
+            split_experiments = [conv for conv in all_converged_experiments if conv['split'] == split_num]
+            if split_experiments:
+                split_cases = [conv['cases_needed'] for conv in split_experiments]
+                if args.classifier == 'svm':
+                    split_support_vectors = [conv['support_vectors'] for conv in split_experiments]
+                    print(f"Split {split_num}: {len(split_experiments)}/{args.iterations} converged, "
+                          f"avg cases: {np.mean(split_cases):.1f}, "
+                          f"min: {min(split_cases)}, max: {max(split_cases)}, "
+                          f"avg SV: {np.mean(split_support_vectors):.1f}, "
+                          f"min SV: {min(split_support_vectors)}, max SV: {max(split_support_vectors)}")
+                else:
+                    print(f"Split {split_num}: {len(split_experiments)}/{args.iterations} converged, "
+                          f"avg cases: {np.mean(split_cases):.1f}, "
+                          f"min: {min(split_cases)}, max: {max(split_cases)}")
+            else:
+                print(f"Split {split_num}: 0/{args.iterations} converged")
+    else:
+        print("No experiments reached the threshold across all splits!")
+    
+    print("="*80)
 
 if __name__ == "__main__":
     main()
