@@ -238,10 +238,12 @@ def run_single_experiment(args_tuple):
     
     exp_results = []
     iteration = 0
+    cases_used = []
+    accuracies = []
     
     while len(used_indices) < len(X_train):
         # Save current state
-        current_accuracy = None
+        accuracy = 0.0
         current_metrics = {}
         
         # Select m random cases from available training data
@@ -266,6 +268,8 @@ def run_single_experiment(args_tuple):
         # Skip if not enough classes
         if len(used_y.unique()) < 2:
             iteration += 1
+            cases_used.append(len(used_indices))
+            accuracies.append(accuracy)
             continue
         
         # Train and evaluate
@@ -274,6 +278,9 @@ def run_single_experiment(args_tuple):
         y_pred = clf.predict(X_test)
         accuracy = accuracy_score(y_test, y_pred)
         
+        cases_used.append(len(used_indices))
+        accuracies.append(accuracy)
+
         # Extract metrics
         if classifier_type == 'dt':
             current_metrics = {'depth': clf.get_depth(), 'leaves': clf.get_n_leaves()}
@@ -308,6 +315,13 @@ def run_single_experiment(args_tuple):
                 conv_data['class'] = used_y.values
                 conv_data.to_csv(f'{split_dir}/converged_exp_{exp_num}.csv', index=False)
                 
+                # Save the histogram data of accuracy to # of cases used per iteration
+                # csv format: iteration, cases, accuracy
+                with open(f'{split_dir}/accuracy_histogram_exp_{exp_num}.csv', 'w') as f:
+                    f.write("cases,accuracy\n")
+                    for i, (cases, acc) in enumerate(zip(cases_used, accuracies)):
+                        f.write(f"{i},{cases},{acc:.3f}\n")
+
                 # Store support vector indices in metrics for plotting
                 current_metrics['support_vector_indices'] = sv_indices.tolist()
             
