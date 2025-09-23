@@ -105,6 +105,125 @@ def find_min_max_experiments(experiments, metric_key):
     
     return min_val, max_val, min_exp, max_exp
 
+def find_representative_experiments(experiments, metric_key='cases_needed'):
+    """Find most representative experiments: closest to average, best (min), and worst (max)"""
+    if not experiments:
+        return None, None, None
+    
+    # Calculate average
+    avg_val = np.mean([exp[metric_key] for exp in experiments])
+    
+    # Find experiment closest to average
+    avg_exp = min(experiments, key=lambda exp: abs(exp[metric_key] - avg_val))
+    
+    # Find best (minimum) and worst (maximum) experiments
+    best_exp = min(experiments, key=lambda exp: exp[metric_key])
+    worst_exp = max(experiments, key=lambda exp: exp[metric_key])
+    
+    return avg_exp, best_exp, worst_exp
+
+def generate_summary_report(all_converged_experiments, split_info_list, args):
+    """Generate the complete summary report as a string"""
+    report_lines = []
+    
+    report_lines.append("="*80)
+    report_lines.append("OVERALL SUMMARY ACROSS ALL SPLITS")
+    report_lines.append("="*80)
+    
+    if all_converged_experiments:
+        report_lines.append(f"Total experiments that converged: {len(all_converged_experiments)}/{args.splits * args.iterations}")
+        
+        # Calculate overall statistics
+        all_iterations = [conv['iteration'] for conv in all_converged_experiments]
+        all_cases = [conv['cases_needed'] for conv in all_converged_experiments]
+        
+        report_lines.append(f"\nOverall Statistics:")
+        report_lines.append(f"Average iterations needed: {np.mean(all_iterations):.1f}")
+        report_lines.append(f"Average cases needed: {np.mean(all_cases):.1f}")
+        
+        # Min/Max cases with class distribution and accuracy
+        min_cases, max_cases, min_exp, max_exp = find_min_max_experiments(all_converged_experiments, 'cases_needed')
+        report_lines.append(f"Min cases needed: {min_cases} (class dist: {format_class_distribution(min_exp['class_distribution'])}, accuracy: {min_exp['accuracy']:.3f})")
+        report_lines.append(f"Max cases needed: {max_cases} (class dist: {format_class_distribution(max_exp['class_distribution'])}, accuracy: {max_exp['accuracy']:.3f})")
+        report_lines.append(f"Standard deviation of cases needed: {np.std(all_cases):.1f}")
+        
+        # Representative experiments
+        avg_exp, best_exp, worst_exp = find_representative_experiments(all_converged_experiments, 'cases_needed')
+        if avg_exp and best_exp and worst_exp:
+            report_lines.append(f"\nRepresentative Experiments (based on cases needed):")
+            report_lines.append(f"Most representative of average: Split {avg_exp['split']}, Exp {avg_exp['experiment']} "
+                              f"({avg_exp['cases_needed']} cases, class dist: {format_class_distribution(avg_exp['class_distribution'])}, accuracy: {avg_exp['accuracy']:.3f})")
+            report_lines.append(f"Most representative of best case: Split {best_exp['split']}, Exp {best_exp['experiment']} "
+                              f"({best_exp['cases_needed']} cases, class dist: {format_class_distribution(best_exp['class_distribution'])}, accuracy: {best_exp['accuracy']:.3f})")
+            report_lines.append(f"Most representative of worst case: Split {worst_exp['split']}, Exp {worst_exp['experiment']} "
+                              f"({worst_exp['cases_needed']} cases, class dist: {format_class_distribution(worst_exp['class_distribution'])}, accuracy: {worst_exp['accuracy']:.3f})")
+        
+        # SVM-specific overall statistics
+        if args.classifier == 'svm':
+            all_support_vectors = [conv['support_vectors'] for conv in all_converged_experiments]
+            report_lines.append(f"\nOverall SVM Support Vector Statistics:")
+            report_lines.append(f"Average support vectors needed: {np.mean(all_support_vectors):.1f}")
+            
+            # Min/Max support vectors with class distribution and accuracy
+            min_sv, max_sv, min_sv_exp, max_sv_exp = find_min_max_experiments(all_converged_experiments, 'support_vectors')
+            report_lines.append(f"Min support vectors needed: {min_sv} (class dist: {format_class_distribution(min_sv_exp['class_distribution'])}, accuracy: {min_sv_exp['accuracy']:.3f})")
+            report_lines.append(f"Max support vectors needed: {max_sv} (class dist: {format_class_distribution(max_sv_exp['class_distribution'])}, accuracy: {max_sv_exp['accuracy']:.3f})")
+            report_lines.append(f"Standard deviation of support vectors: {np.std(all_support_vectors):.1f}")
+            
+            # Representative experiments for support vectors
+            avg_sv_exp, best_sv_exp, worst_sv_exp = find_representative_experiments(all_converged_experiments, 'support_vectors')
+            if avg_sv_exp and best_sv_exp and worst_sv_exp:
+                report_lines.append(f"\nRepresentative Experiments (based on support vectors):")
+                report_lines.append(f"Most representative of average: Split {avg_sv_exp['split']}, Exp {avg_sv_exp['experiment']} "
+                                  f"({avg_sv_exp['support_vectors']} support vectors, class dist: {format_class_distribution(avg_sv_exp['class_distribution'])}, accuracy: {avg_sv_exp['accuracy']:.3f})")
+                report_lines.append(f"Most representative of best case: Split {best_sv_exp['split']}, Exp {best_sv_exp['experiment']} "
+                                  f"({best_sv_exp['support_vectors']} support vectors, class dist: {format_class_distribution(best_sv_exp['class_distribution'])}, accuracy: {best_sv_exp['accuracy']:.3f})")
+                report_lines.append(f"Most representative of worst case: Split {worst_sv_exp['split']}, Exp {worst_sv_exp['experiment']} "
+                                  f"({worst_sv_exp['support_vectors']} support vectors, class dist: {format_class_distribution(worst_sv_exp['class_distribution'])}, accuracy: {worst_sv_exp['accuracy']:.3f})")
+        
+        # Per-split summary
+        report_lines.append(f"\nPer-Split Summary:")
+        for split_num in range(1, args.splits + 1):
+            split_experiments = [conv for conv in all_converged_experiments if conv['split'] == split_num]
+            split_info = next((info for info in split_info_list if info['split_num'] == split_num), None)
+            
+            if split_experiments:
+                split_cases = [conv['cases_needed'] for conv in split_experiments]
+                if args.classifier == 'svm':
+                    split_support_vectors = [conv['support_vectors'] for conv in split_experiments]
+                    min_cases, max_cases, min_exp, max_exp = find_min_max_experiments(split_experiments, 'cases_needed')
+                    min_sv, max_sv, min_sv_exp, max_sv_exp = find_min_max_experiments(split_experiments, 'support_vectors')
+                    report_lines.append(f"Split {split_num}: {len(split_experiments)}/{args.iterations} converged, "
+                              f"avg cases: {np.mean(split_cases):.1f}, "
+                              f"min: {min_cases} ({format_class_distribution(min_exp['class_distribution'])}, acc: {min_exp['accuracy']:.3f}), "
+                              f"max: {max_cases} ({format_class_distribution(max_exp['class_distribution'])}, acc: {max_exp['accuracy']:.3f}), "
+                              f"avg SV: {np.mean(split_support_vectors):.1f}, "
+                              f"min SV: {min_sv} ({format_class_distribution(min_sv_exp['class_distribution'])}, acc: {min_sv_exp['accuracy']:.3f}), "
+                              f"max SV: {max_sv} ({format_class_distribution(max_sv_exp['class_distribution'])}, acc: {max_sv_exp['accuracy']:.3f})")
+                    if split_info:
+                        report_lines.append(f"  Train dist: {format_class_distribution(split_info['train_class_dist'])}, "
+                                  f"Test dist: {format_class_distribution(split_info['test_class_dist'])}")
+                else:
+                    min_cases, max_cases, min_exp, max_exp = find_min_max_experiments(split_experiments, 'cases_needed')
+                    report_lines.append(f"Split {split_num}: {len(split_experiments)}/{args.iterations} converged, "
+                              f"avg cases: {np.mean(split_cases):.1f}, "
+                              f"min: {min_cases} ({format_class_distribution(min_exp['class_distribution'])}, acc: {min_exp['accuracy']:.3f}), "
+                              f"max: {max_cases} ({format_class_distribution(max_exp['class_distribution'])}, acc: {max_exp['accuracy']:.3f})")
+                    if split_info:
+                        report_lines.append(f"  Train dist: {format_class_distribution(split_info['train_class_dist'])}, "
+                                  f"Test dist: {format_class_distribution(split_info['test_class_dist'])}")
+            else:
+                report_lines.append(f"Split {split_num}: 0/{args.iterations} converged")
+                if split_info:
+                    report_lines.append(f"  Train dist: {format_class_distribution(split_info['train_class_dist'])}, "
+                              f"Test dist: {format_class_distribution(split_info['test_class_dist'])}")
+    else:
+        report_lines.append("No experiments reached the threshold across all splits!")
+    
+    report_lines.append("="*80)
+    
+    return "\n".join(report_lines)
+
 def run_single_experiment(args_tuple):
     """Run a single experiment - designed for parallel execution"""
     (exp_num, X_train, y_train, X_test, y_test, classifier_type, threshold, m, action, classifier_kwargs, split_dir) = args_tuple
@@ -424,79 +543,15 @@ def main():
             all_results_flat.extend(split_results)
         plot_svm_cases_vs_support_vectors(all_results_flat, exp_dir)
     
-    # Print overall summary across all splits
-    print("\n" + "="*80)
-    print("OVERALL SUMMARY ACROSS ALL SPLITS")
-    print("="*80)
+    # Generate and save summary report to file
+    summary_report = generate_summary_report(all_converged_experiments, split_info_list, args)
     
-    if all_converged_experiments:
-        print(f"Total experiments that converged: {len(all_converged_experiments)}/{args.splits * args.iterations}")
-        
-        # Calculate overall statistics
-        all_iterations = [conv['iteration'] for conv in all_converged_experiments]
-        all_cases = [conv['cases_needed'] for conv in all_converged_experiments]
-        
-        print(f"\nOverall Statistics:")
-        print(f"Average iterations needed: {np.mean(all_iterations):.1f}")
-        print(f"Average cases needed: {np.mean(all_cases):.1f}")
-        
-        # Min/Max cases with class distribution and accuracy
-        min_cases, max_cases, min_exp, max_exp = find_min_max_experiments(all_converged_experiments, 'cases_needed')
-        print(f"Min cases needed: {min_cases} (class dist: {format_class_distribution(min_exp['class_distribution'])}, accuracy: {min_exp['accuracy']:.3f})")
-        print(f"Max cases needed: {max_cases} (class dist: {format_class_distribution(max_exp['class_distribution'])}, accuracy: {max_exp['accuracy']:.3f})")
-        print(f"Standard deviation of cases needed: {np.std(all_cases):.1f}")
-        
-        # SVM-specific overall statistics
-        if args.classifier == 'svm':
-            all_support_vectors = [conv['support_vectors'] for conv in all_converged_experiments]
-            print(f"\nOverall SVM Support Vector Statistics:")
-            print(f"Average support vectors needed: {np.mean(all_support_vectors):.1f}")
-            
-            # Min/Max support vectors with class distribution and accuracy
-            min_sv, max_sv, min_sv_exp, max_sv_exp = find_min_max_experiments(all_converged_experiments, 'support_vectors')
-            print(f"Min support vectors needed: {min_sv} (class dist: {format_class_distribution(min_sv_exp['class_distribution'])}, accuracy: {min_sv_exp['accuracy']:.3f})")
-            print(f"Max support vectors needed: {max_sv} (class dist: {format_class_distribution(max_sv_exp['class_distribution'])}, accuracy: {max_sv_exp['accuracy']:.3f})")
-            print(f"Standard deviation of support vectors: {np.std(all_support_vectors):.1f}")
-        
-        # Per-split summary
-        print(f"\nPer-Split Summary:")
-        for split_num in range(1, args.splits + 1):
-            split_experiments = [conv for conv in all_converged_experiments if conv['split'] == split_num]
-            split_info = next((info for info in split_info_list if info['split_num'] == split_num), None)
-            
-            if split_experiments:
-                split_cases = [conv['cases_needed'] for conv in split_experiments]
-                if args.classifier == 'svm':
-                    split_support_vectors = [conv['support_vectors'] for conv in split_experiments]
-                    min_cases, max_cases, min_exp, max_exp = find_min_max_experiments(split_experiments, 'cases_needed')
-                    min_sv, max_sv, min_sv_exp, max_sv_exp = find_min_max_experiments(split_experiments, 'support_vectors')
-                    print(f"Split {split_num}: {len(split_experiments)}/{args.iterations} converged, "
-                          f"avg cases: {np.mean(split_cases):.1f}, "
-                          f"min: {min_cases} ({format_class_distribution(min_exp['class_distribution'])}, acc: {min_exp['accuracy']:.3f}), "
-                          f"max: {max_cases} ({format_class_distribution(max_exp['class_distribution'])}, acc: {max_exp['accuracy']:.3f}), "
-                          f"avg SV: {np.mean(split_support_vectors):.1f}, "
-                          f"min SV: {min_sv} ({format_class_distribution(min_sv_exp['class_distribution'])}, acc: {min_sv_exp['accuracy']:.3f}), "
-                          f"max SV: {max_sv} ({format_class_distribution(max_sv_exp['class_distribution'])}, acc: {max_sv_exp['accuracy']:.3f})")
-                    if split_info:
-                        print(f"  Train dist: {format_class_distribution(split_info['train_class_dist'])}, "
-                              f"Test dist: {format_class_distribution(split_info['test_class_dist'])}")
-                else:
-                    min_cases, max_cases, min_exp, max_exp = find_min_max_experiments(split_experiments, 'cases_needed')
-                    print(f"Split {split_num}: {len(split_experiments)}/{args.iterations} converged, "
-                          f"avg cases: {np.mean(split_cases):.1f}, "
-                          f"min: {min_cases} ({format_class_distribution(min_exp['class_distribution'])}, acc: {min_exp['accuracy']:.3f}), "
-                          f"max: {max_cases} ({format_class_distribution(max_exp['class_distribution'])}, acc: {max_exp['accuracy']:.3f})")
-                    if split_info:
-                        print(f"  Train dist: {format_class_distribution(split_info['train_class_dist'])}, "
-                              f"Test dist: {format_class_distribution(split_info['test_class_dist'])}")
-            else:
-                print(f"Split {split_num}: 0/{args.iterations} converged")
-                if split_info:
-                    print(f"  Train dist: {format_class_distribution(split_info['train_class_dist'])}, "
-                          f"Test dist: {format_class_distribution(split_info['test_class_dist'])}")
-    else:
-        print("No experiments reached the threshold across all splits!")
+    # Save summary to text file
+    summary_file = f'{exp_dir}/summary_report.txt'
+    with open(summary_file, 'w') as f:
+        f.write(summary_report)
     
+    print(f"\nSummary report saved to: {summary_file}")
     print("="*80)
 
 if __name__ == "__main__":
