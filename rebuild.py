@@ -11,7 +11,7 @@ import pickle
 from typing import Tuple, List, Dict, Any
 import matplotlib.pyplot as plt
 from pandas.plotting import parallel_coordinates
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 from datetime import datetime
 
@@ -63,11 +63,38 @@ def load_data(data_file: str, test_file: str = None, train_pct: float = 0.7, tes
         else:
             print(f"Warning: Could not find unique split after {max_attempts} attempts")
     
+    # Check for and handle NaN values
+    if X_train.isnull().any().any():
+        print("Warning: Found NaN values in training data. Filling with column means.")
+        X_train = X_train.fillna(X_train.mean())
+    
+    if X_test.isnull().any().any():
+        print("Warning: Found NaN values in test data. Filling with training column means.")
+        X_test = X_test.fillna(X_train.mean())
+    
     # Normalize
     min_vals = X_train.min()
     max_vals = X_train.max()
-    X_train = (X_train - min_vals) / (max_vals - min_vals)
-    X_test = (X_test - min_vals) / (max_vals - min_vals)
+    
+    # Handle constant features (where max == min) to avoid division by zero
+    range_vals = max_vals - min_vals
+    constant_features = range_vals == 0
+    
+    # Normalize non-constant features
+    X_train_norm = X_train.copy()
+    X_test_norm = X_test.copy()
+    
+    for col in X_train.columns:
+        if not constant_features[col]:
+            X_train_norm[col] = (X_train[col] - min_vals[col]) / range_vals[col]
+            X_test_norm[col] = (X_test[col] - min_vals[col]) / range_vals[col]
+        else:
+            # For constant features, set to 0 (or keep original value)
+            X_train_norm[col] = 0.0
+            X_test_norm[col] = 0.0
+    
+    X_train = X_train_norm
+    X_test = X_test_norm
     
     return X_train, y_train, X_test, y_test
 
@@ -240,12 +267,10 @@ def run_single_experiment(args_tuple):
     iteration = 0
     cases_used = []
     accuracies = []
-    
+    current_metrics = {}
+    accuracy = 0.0  # Initialize accuracy
+
     while len(used_indices) < len(X_train):
-        # Save current state
-        accuracy = 0.0
-        current_metrics = {}
-        
         # Select m random cases from available training data
         available = set(range(len(X_train))) - used_indices
         if len(available) < m:
@@ -320,7 +345,7 @@ def run_single_experiment(args_tuple):
                 with open(f'{split_dir}/accuracy_histogram_exp_{exp_num}.csv', 'w') as f:
                     f.write("cases,accuracy\n")
                     for i, (cases, acc) in enumerate(zip(cases_used, accuracies)):
-                        f.write(f"{i},{cases},{acc:.3f}\n")
+                        f.write(f"{cases},{acc:.3f}\n")
 
                 # Store support vector indices in metrics for plotting
                 current_metrics['support_vector_indices'] = sv_indices.tolist()
@@ -332,7 +357,7 @@ def run_single_experiment(args_tuple):
     return exp_results
 
 def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, threshold, m, iterations, action, split_dir, **classifier_kwargs):
-    """Main testing loop using parallel execution"""
+    """Main testing loop using parallel execution with progress tracking"""
     print(f"Running {iterations} experiments in parallel...")
     
     # Prepare arguments for parallel execution
@@ -341,10 +366,29 @@ def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, thr
         args_tuple = (exp + 1, X_train, y_train, X_test, y_test, classifier_type, threshold, m, action, classifier_kwargs, split_dir)
         args_list.append(args_tuple)
     
-    # Run experiments in parallel
+    # Run experiments in parallel with progress tracking
     max_workers = min(multiprocessing.cpu_count(), iterations)
+    results = [None] * iterations  # Pre-allocate results list
+    
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        results = list(executor.map(run_single_experiment, args_list))
+        # Submit all experiments
+        future_to_index = {
+            executor.submit(run_single_experiment, args): i 
+            for i, args in enumerate(args_list)
+        }
+        
+        # Track progress as experiments complete
+        completed = 0
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            try:
+                results[index] = future.result()
+                completed += 1
+                if completed % max(1, iterations // 10) == 0 or completed == iterations:
+                    print(f"Progress: {completed}/{iterations} experiments completed ({completed/iterations*100:.1f}%)")
+            except Exception as exc:
+                print(f'Experiment {index + 1} generated an exception: {exc}')
+                results[index] = []  # Empty result for failed experiment
     
     print(f"Completed {iterations} experiments")
     return results
@@ -403,10 +447,10 @@ def plot_svm_cases_vs_support_vectors(all_results, exp_dir):
 
 def main():
     parser = argparse.ArgumentParser(description='Iterative Sureness Testing')
-    parser.add_argument('--data', required=True, help='Training data file')
-    parser.add_argument('--test-data', help='Test data file (optional)')
-    parser.add_argument('--train-pct', type=float, default=0.7, help='Training percentage')
-    parser.add_argument('--test-pct', type=float, default=0.3, help='Test percentage')
+    parser.add_argument('--data', required=True, help='Training data file (or single dataset to split)')
+    parser.add_argument('--test-data', help='Test data file (optional - if provided, data will not be split)')
+    parser.add_argument('--train-pct', type=float, default=0.7, help='Training percentage (ignored if --test-data provided)')
+    parser.add_argument('--test-pct', type=float, default=0.3, help='Test percentage (ignored if --test-data provided)')
     parser.add_argument('--classifier', required=True, choices=['dt', 'knn', 'svm'], help='Classifier type')
     parser.add_argument('--k', type=int, default=3, help='k for KNN')
     parser.add_argument('--metric', default='euclidean', help='Distance metric for KNN')
@@ -419,8 +463,8 @@ def main():
     
     args = parser.parse_args()
     
-    # Validate percentages
-    if abs(args.train_pct + args.test_pct - 1.0) > 1e-6:
+    # Validate percentages only if not using pre-split data
+    if not args.test_data and abs(args.train_pct + args.test_pct - 1.0) > 1e-6:
         parser.error("train_pct + test_pct must equal 1.0")
     
     # Create timestamped experiment directory
@@ -440,6 +484,8 @@ def main():
     used_splits = set()  # Track used splits to avoid duplicates
     
     print(f"Running {args.splits} split(s) with {args.iterations} experiments each...")
+    if args.test_data:
+        print("Note: Using pre-split data - all splits will use the same train/test data")
     print(f"Results will be saved to: {exp_dir}")
     print("="*80)
     
@@ -447,11 +493,17 @@ def main():
         print(f"\nSPLIT {split_num}/{args.splits}")
         print("-" * 40)
         
-        # Load data for this split (ensure unique split)
-        print(f"Loading data for split {split_num} (ensuring unique split)...")
-        X_train, y_train, X_test, y_test = load_data(
-            args.data, args.test_data, args.train_pct, args.test_pct, used_splits
-        )
+        # Load data for this split
+        if args.test_data:
+            print(f"Loading pre-split data for split {split_num}...")
+            X_train, y_train, X_test, y_test = load_data(
+                args.data, args.test_data, args.train_pct, args.test_pct, None
+            )
+        else:
+            print(f"Loading data for split {split_num} (ensuring unique split)...")
+            X_train, y_train, X_test, y_test = load_data(
+                args.data, args.test_data, args.train_pct, args.test_pct, used_splits
+            )
         
         # Create subfolder for this split
         split_dir = f'{exp_dir}/split_{split_num}'
