@@ -4,7 +4,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
 import argparse
 import os
 import pickle
@@ -112,6 +112,34 @@ def get_classifier(classifier_type: str, k: int = 3, metric: str = 'euclidean'):
 def get_class_distribution(y_series):
     """Get class distribution as a dictionary"""
     return y_series.value_counts().to_dict()
+
+def stratified_sample_indices(available_indices, y_train, n_samples, random_seed):
+    """Select n_samples indices using stratified sampling to preserve class distribution"""
+    if len(available_indices) <= n_samples:
+        return list(available_indices)
+    
+    # Convert to list for indexing
+    available_list = list(available_indices)
+    
+    # Get the labels for available indices
+    available_y = y_train.iloc[available_list].values
+    
+    # Check if we have enough classes for stratification
+    unique_classes = np.unique(available_y)
+    if len(unique_classes) < 2 or n_samples < len(unique_classes):
+        # Can't stratify, use random sampling
+        np.random.seed(random_seed)
+        return np.random.choice(available_list, n_samples, replace=False).tolist()
+    
+    # Use StratifiedShuffleSplit to get stratified sample
+    # Create a dummy X array (we only need y for stratification)
+    dummy_X = np.arange(len(available_list)).reshape(-1, 1)
+    sss = StratifiedShuffleSplit(n_splits=1, test_size=n_samples, random_state=random_seed)
+    # Get the split - we want the test indices (which are our selected samples)
+    _, selected_idx = next(sss.split(dummy_X, available_y))
+    selected_indices = [available_list[i] for i in selected_idx]
+    
+    return selected_indices
 
 def format_class_distribution(class_dist):
     """Format class distribution for display with class names"""
@@ -253,10 +281,10 @@ def generate_summary_report(all_converged_experiments, split_info_list, args):
 
 def run_single_experiment(args_tuple):
     """Run a single experiment - designed for parallel execution"""
-    (exp_num, X_train, y_train, X_test, y_test, classifier_type, threshold, m, action, classifier_kwargs, split_dir) = args_tuple
+    (exp_num, X_train, y_train, X_test, y_test, classifier_type, threshold, m, action, classifier_kwargs, split_dir, exp_seed) = args_tuple
     
-    # Set different random seed for each experiment
-    np.random.seed(np.random.randint(0, 2**31))
+    # Set unique random seed for this experiment
+    np.random.seed(exp_seed)
     
     # Initialize used training subset
     used_indices = set()
@@ -271,14 +299,16 @@ def run_single_experiment(args_tuple):
     accuracy = 0.0  # Initialize accuracy
 
     while len(used_indices) < len(X_train):
-        # Select m random cases from available training data
+        # Select m cases from available training data using stratified sampling
+        # This preserves the class distribution in each batch, ensuring representative samples
         available = set(range(len(X_train))) - used_indices
         if len(available) < m:
             selected = list(available)
         else:
-            available_indices = list(available)
-            # Random sampling from available cases (preserves natural class distribution)
-            selected = np.random.choice(available_indices, m, replace=False).tolist()
+            # Use stratified sampling to preserve class distribution
+            # Generate a unique seed for this iteration based on experiment seed and iteration
+            iter_seed = (exp_seed + iteration) % (2**31)
+            selected = stratified_sample_indices(available, y_train, m, iter_seed)
         
         # Apply action
         if action == 'additive':
@@ -360,10 +390,15 @@ def run_iterative_testing(X_train, y_train, X_test, y_test, classifier_type, thr
     """Main testing loop using parallel execution with progress tracking"""
     print(f"Running {iterations} experiments in parallel...")
     
+    # Generate unique seeds for each experiment
+    # Use a base seed and increment to ensure uniqueness
+    base_seed = np.random.randint(0, 2**31)
+    experiment_seeds = [(base_seed + exp * 1000) % (2**31) for exp in range(iterations)]
+    
     # Prepare arguments for parallel execution
     args_list = []
     for exp in range(iterations):
-        args_tuple = (exp + 1, X_train, y_train, X_test, y_test, classifier_type, threshold, m, action, classifier_kwargs, split_dir)
+        args_tuple = (exp + 1, X_train, y_train, X_test, y_test, classifier_type, threshold, m, action, classifier_kwargs, split_dir, experiment_seeds[exp])
         args_list.append(args_tuple)
     
     # Run experiments in parallel with progress tracking
@@ -445,6 +480,106 @@ def plot_svm_cases_vs_support_vectors(all_results, exp_dir):
     
     print(f"Parallel coordinates plot saved: {plot_path}")
 
+def plot_cases_needed_vs_m(m_values, cases_needed_list, exp_dir):
+    """Create plot showing number of cases needed vs m value"""
+    if not m_values or not cases_needed_list:
+        print("No data to plot for cases needed vs m")
+        return
+    
+    # Filter out m values with no valid data
+    valid_m_values = []
+    valid_cases_lists = []
+    for m, cases_list in zip(m_values, cases_needed_list):
+        if cases_list:  # Only include if there's at least one converged experiment
+            valid_m_values.append(m)
+            valid_cases_lists.append(cases_list)
+    
+    if not valid_m_values:
+        print("No converged experiments to plot")
+        return
+    
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
+    # Calculate mean and std for each m value
+    mean_cases = [np.mean(cases_list) for cases_list in valid_cases_lists]
+    std_cases = [np.std(cases_list) for cases_list in valid_cases_lists]
+    
+    ax.plot(valid_m_values, mean_cases, 'o-', linewidth=2, markersize=8, label='Mean Cases Needed', color='blue')
+    ax.fill_between(valid_m_values, 
+                   [m - s for m, s in zip(mean_cases, std_cases)],
+                   [m + s for m, s in zip(mean_cases, std_cases)],
+                   alpha=0.2, color='blue', label='±1 Std Dev')
+    
+    # Labels and title
+    ax.set_xlabel('m Value (Cases per Iteration)', fontsize=12)
+    ax.set_ylabel('Number of Cases Needed to Reach Threshold', fontsize=12)
+    ax.set_title('SVM: Cases Needed vs m Value (Cases per Iteration)', fontsize=14, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(left=0)
+    ax.set_ylim(bottom=0)
+    
+    # Save plot
+    plot_path = f'{exp_dir}/svm_cases_needed_vs_m.png'
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Cases needed vs m plot saved: {plot_path}")
+
+def run_m_value_experiments(X_train, y_train, X_test, y_test, classifier_type, threshold, 
+                            m_values, iterations, action, exp_dir, **classifier_kwargs):
+    """Run experiments for multiple m values and return cases needed results"""
+    m_cases_needed = {}
+    
+    print(f"\nTesting {len(m_values)} different m values: {m_values}")
+    print("="*80)
+    
+    for m_idx, m in enumerate(m_values):
+        print(f"\nTesting m={m} ({m_idx+1}/{len(m_values)})")
+        print("-" * 40)
+        
+        # Create subdirectory for this m value
+        m_dir = f'{exp_dir}/m_{m}'
+        os.makedirs(m_dir, exist_ok=True)
+        
+        # Run experiments for this m value
+        results = run_iterative_testing(
+            X_train, y_train, X_test, y_test,
+            classifier_type, threshold, m, iterations, action, m_dir,
+            **classifier_kwargs
+        )
+        
+        # Extract number of cases needed when threshold is reached
+        m_cases_list = []
+        for exp_results in results:
+            converged = False
+            for iter_result in exp_results:
+                if iter_result['accuracy'] >= threshold:
+                    m_cases_list.append(iter_result['used_size'])
+                    converged = True
+                    break
+            if not converged:
+                # If threshold not reached, use None or final size
+                if exp_results:
+                    # Could use final size, but better to mark as not converged
+                    m_cases_list.append(None)
+                else:
+                    m_cases_list.append(None)
+        
+        m_cases_needed[m] = m_cases_list
+        
+        # Filter out None values for statistics
+        valid_cases = [c for c in m_cases_list if c is not None]
+        if valid_cases:
+            print(f"m={m}: Mean cases needed = {np.mean(valid_cases):.1f} ± {np.std(valid_cases):.1f}")
+            print(f"  Converged experiments: {len(valid_cases)}/{iterations}")
+            if len(valid_cases) < iterations:
+                print(f"  Failed to converge: {iterations - len(valid_cases)} experiments")
+        else:
+            print(f"m={m}: No experiments reached threshold")
+    
+    return m_cases_needed
+
 def main():
     parser = argparse.ArgumentParser(description='Iterative Sureness Testing')
     parser.add_argument('--data', required=True, help='Training data file (or single dataset to split)')
@@ -455,13 +590,26 @@ def main():
     parser.add_argument('--k', type=int, default=3, help='k for KNN')
     parser.add_argument('--metric', default='euclidean', help='Distance metric for KNN')
     parser.add_argument('--threshold', type=float, default=0.95, help='Accuracy threshold')
-    parser.add_argument('--m', type=int, default=5, help='Cases per iteration')
+    parser.add_argument('--m', type=int, default=5, help='Cases per iteration (or single m value)')
+    parser.add_argument('--m-values', help='Comma-separated list of m values to test (e.g., "1,5,10,20,50,100")')
+    parser.add_argument('--m-range', help='Range of m values: start,stop,step (e.g., "1,100,10")')
     parser.add_argument('--iterations', type=int, default=10, help='Number of experiments per split')
     parser.add_argument('--splits', type=int, default=1, help='Number of splits to test')
     parser.add_argument('--action', choices=['additive', 'subtractive'], default='additive', help='Action type')
     parser.add_argument('--plot', action='store_true', help='Create plots (default: False)')
     
     args = parser.parse_args()
+    
+    # Parse m values if specified
+    m_values = None
+    if args.m_values:
+        m_values = [int(x.strip()) for x in args.m_values.split(',')]
+    elif args.m_range:
+        start, stop, step = map(int, args.m_range.split(','))
+        m_values = list(range(start, stop + 1, step))
+    
+    # If m_values specified, we're in "accuracy vs m" mode
+    accuracy_vs_m_mode = m_values is not None
     
     # Validate percentages only if not using pre-split data
     if not args.test_data and abs(args.train_pct + args.test_pct - 1.0) > 1e-6:
@@ -476,6 +624,75 @@ def main():
     classifier_kwargs = {}
     if args.classifier == 'knn':
         classifier_kwargs = {'k': args.k, 'metric': args.metric}
+    
+    # Handle accuracy vs m mode
+    if accuracy_vs_m_mode:
+        if args.classifier != 'svm':
+            parser.error("Accuracy vs m plotting is currently only supported for SVM classifier")
+        if not args.test_data:
+            parser.error("Accuracy vs m mode requires --test-data to be specified")
+        
+        print("="*80)
+        print("ACCURACY VS M VALUE MODE")
+        print("="*80)
+        print(f"Testing m values: {m_values}")
+        print(f"Classifier: {args.classifier.upper()}")
+        print(f"Threshold: {args.threshold}")
+        print(f"Iterations per m value: {args.iterations}")
+        print(f"Results will be saved to: {exp_dir}")
+        print("="*80)
+        
+        # Load data once
+        print(f"\nLoading data...")
+        X_train, y_train, X_test, y_test = load_data(
+            args.data, args.test_data, args.train_pct, args.test_pct, None
+        )
+        
+        # Calculate and display class distributions
+        train_class_dist = get_class_distribution(y_train)
+        test_class_dist = get_class_distribution(y_test)
+        
+        print(f"Training data: {len(X_train)} samples")
+        print(f"  Training class distribution: {format_class_distribution(train_class_dist)}")
+        print(f"Test data: {len(X_test)} samples")
+        print(f"  Test class distribution: {format_class_distribution(test_class_dist)}")
+        
+        # Run experiments for each m value
+        m_cases_needed = run_m_value_experiments(
+            X_train, y_train, X_test, y_test,
+            args.classifier, args.threshold, m_values, args.iterations, args.action, exp_dir,
+            **classifier_kwargs
+        )
+        
+        # Create cases needed vs m plot
+        if args.plot:
+            print("\nCreating cases needed vs m plot...")
+            sorted_m_values = sorted(m_values)
+            # Filter out None values for plotting (only plot converged experiments)
+            sorted_cases = []
+            for m in sorted_m_values:
+                cases_list = m_cases_needed.get(m, [])
+                # Filter out None values
+                valid_cases = [c for c in cases_list if c is not None]
+                sorted_cases.append(valid_cases if valid_cases else [])
+            plot_cases_needed_vs_m(sorted_m_values, sorted_cases, exp_dir)
+        
+        # Print summary
+        print("\n" + "="*80)
+        print("SUMMARY")
+        print("="*80)
+        for m in sorted(m_values):
+            cases_list = m_cases_needed.get(m, [])
+            valid_cases = [c for c in cases_list if c is not None]
+            if valid_cases:
+                print(f"m={m:3d}: Mean cases needed = {np.mean(valid_cases):.1f} ± {np.std(valid_cases):.1f}, "
+                      f"Converged: {len(valid_cases)}/{args.iterations}")
+                if len(valid_cases) < args.iterations:
+                    print(f"         Failed to converge: {args.iterations - len(valid_cases)} experiments")
+            else:
+                print(f"m={m:3d}: No experiments reached threshold")
+        print("="*80)
+        return
     
     # Store all results across splits
     all_splits_results = []
