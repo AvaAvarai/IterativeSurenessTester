@@ -1,6 +1,6 @@
 # Bidirectional Active Processing (BAP) Implementation
 
-Reimplementation of the BAP algorithm from [Bidirectional Active Processing.md](../../algorithms/bidirectional%20active%20processing/Bidirectional%20Active%20Processing.md) as specified in our Electronics paper available both [online](https://www.mdpi.com/2079-9292/15/3/580) and [locally](../../algorithms/bidirectional%20active%20processing/Quantifying%20AI%20Model%20Trust%20as%20a%20Model%20Sureness%20Measure%20by%20Bidirectional%20Active%20Processing%20and%20Visual%20Knowledge%20Discovery.pdf). Single-file implementations in Python and Julia with TOML configuration.
+Reimplementation of the BAP algorithm from [Bidirectional Active Processing.md](./docs/algorithms/bidirectional%20active%20processing/Bidirectional%20Active%20Processing.md) as specified in our Electronics paper available both [online](https://www.mdpi.com/2079-9292/15/3/580) and [locally](docs/bidirectional%20active%20processing/Quantifying%20AI%20Model%20Trust%20as%20a%20Model%20Sureness%20Measure%20by%20Bidirectional%20Active%20Processing%20and%20Visual%20Knowledge%20Discovery.pdf). Single-file implementations in Python and Julia with TOML configuration.
 
 ## Requirements
 
