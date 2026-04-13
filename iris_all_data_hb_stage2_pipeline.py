@@ -25,7 +25,7 @@ from bap import (
     load_csv,
     split_data,
 )
-from hb_dv import Hyperblock, HyperblockClassifierDV
+from hyperblock.hb_dv import Hyperblock, HyperblockClassifierDV
 
 
 class _HBClf:

@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from bap import DEFAULTS, EXPORT_CLASS_COL, load_csv, split_data
-from hb_dv import Hyperblock
+from hyperblock.hb_dv import Hyperblock
 
 _HB_CLASS_RE = re.compile(r"^(.+)__HB(\d+)__(bottom|top)$")
 

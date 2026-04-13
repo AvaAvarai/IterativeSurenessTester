@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
-from hb_dv import Hyperblock
+from hyperblock.hb_dv import Hyperblock
 from bap import (
     DEFAULTS,
     EXPORT_CLASS_COL,

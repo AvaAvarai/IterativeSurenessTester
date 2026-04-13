@@ -24,8 +24,8 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 
-from hb_viscanvas import HyperblockClassifierVisCanvas
-from hb_dv import HyperblockClassifierDV
+from hyperblock.hb_viscanvas import HyperblockClassifierVisCanvas
+from hyperblock.hb_dv import HyperblockClassifierDV
 
 
 # --- Configuration ---

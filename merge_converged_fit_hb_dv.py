@@ -18,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 
 from bap import detect_class_column, hyperblock_edges_tabular_export
-from hb_dv import HyperblockClassifierDV
+from hyperblock.hb_dv import HyperblockClassifierDV
 
 
 def converged_case_csv_paths(split_dir: Path) -> list[Path]:
