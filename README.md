@@ -1,65 +1,198 @@
-# IterativeSurenessTester
+# Bidirectional Active Processing (BAP) Implementation
 
-First sureness measure test tool with Supervised Iterative Learning alternative to Active Learning to find ML model stability point in supervised classifiers.
+Reimplementation of the BAP algorithm from [Bidirectional Active Processing.md](./docs/Bidirectional%20Active%20Processing.md) as specified in our Electronics paper available both [online](https://www.mdpi.com/2079-9292/15/3/580) and [locally](./docs/Quantifying%20AI%20Model%20Trust%20as%20a%20Model%20Sureness%20Measure%20by%20Bidirectional%20Active%20Processing%20and%20Visual%20Knowledge%20Discovery.pdf). Single-file implementations in Python and Julia with TOML configuration.
 
-![Screenshot](parallel_coordinates_grid.png)
+## Requirements
 
-## Usage
+### Python
+- Python 3.11  
+- `numpy`, `pandas`, `scikit-learn`  
+- `tomli` (for Python &lt; 3.11)  
+
+Use the project venv when present (dependencies are installed there):
 
 ```bash
-python tester.py [options]
+source .venv311/bin/activate   # macOS / Linux
+python bap.py -c examples/configs/config_iris.toml
 ```
 
-### Required Arguments
+Or run without activating:
 
-- `--classifier {svm,knn}`: Type of classifier to use
-  - `svm`: Support Vector Machine classifier
-  - `knn`: K-Nearest Neighbors classifier
-
-- `--train-data PATH`: Path to the training dataset file (CSV format)
-
-### Optional Arguments
-
-- `--k INT`: k value for KNN classifier (required if using KNN)
-- `--test-data PATH`: Path to the test dataset file (CSV format). If not provided, the training data will be split into train/test sets.
-- `--experiments INT`: Number of experiments to run (default: 100)
-- `--increment INT`: Increment size for training (default: 5)
-- `--threshold FLOAT`: Accuracy threshold to track (default: 0.95)
-- `--plot`: Enable parallel coordinates plots visualization
-- `--save-converged`: Save converged data to CSV files (saved in results directory)
-
-### Example Commands
-
-1. Run KNN with k=3 on MNIST dataset:
 ```bash
-python tester.py --classifier knn --k 3 --train-data mnist_train_dr.csv --test-data mnist_test_dr.csv --experiments 1 --increment 100
+.venv311/bin/python bap.py -c examples/configs/config_iris.toml
 ```
 
-2. Run SVM with default settings and save converged data:
+To create or refresh the venv:
+
 ```bash
-python tester.py --classifier svm --train-data data.csv --save-converged
+python3.11 -m venv .venv311
+.venv311/bin/python -m pip install -r requirements.txt
 ```
 
-3. Run KNN with visualization and custom threshold:
+Configs point at CSVs under [computing/machine learning datasets](../../machine%20learning%20datasets/) (not copies inside other app repos).
+
+### Julia
+- Julia 1.8+  
+- Packages: CSV, DataFrames, ScikitLearn, TOML  
+  (ScikitLearn requires Python with scikit-learn)
+
 ```bash
-python tester.py --classifier knn --k 5 --train-data data.csv --threshold 0.90 --plot
+julia -e 'using Pkg; Pkg.activate("."); Pkg.instantiate()'
 ```
+(Run from this `BAP rebuild` directory.)
+
+## Quick Start
+
+### Single CSV (train/test split)
+Example: Fisher Iris dataset
+```bash
+# Python (after: source .venv311/bin/activate)
+python bap.py -c examples/configs/config_iris.toml
+
+# Or with flags
+python bap.py --train "../../machine learning datasets/default/fisher_iris.csv" --testing split --split 0.8,0.2 --classifier dt -t 0.95 -n 10 -m 5
+```
+
+### Separate train and test CSVs
+Example: MNIST
+```bash
+# Python
+python bap.py -c examples/configs/config_mnist.toml
+
+# Or with flags
+python bap.py --train "../../machine learning datasets/default/mnist_train.csv" --test "../../machine learning datasets/default/mnist_test.csv" --testing fixed --classifier knn --k 5 -n 5 -m 100
+```
+
+### Julia
+```bash
+julia bap.jl -c examples/configs/config_iris.toml
+julia bap.jl -c examples/configs/config_mnist.toml
+julia bap.jl --train "../../machine learning datasets/default/fisher_iris.csv" -c examples/configs/config_iris.toml  # override train path
+```
+
+## Configuration
+
+All options can be set via **TOML config** (preferred) or **CLI flags**. TOML overrides defaults; flags override TOML.
+
+### TOML structure
+
+| Parameter | TOML | Definition |
+|-----------|------|------------|
+| `train` | `train = "path.csv"` | Training CSV (or single dataset to split) |
+| `test` | `test = "path.csv"` | Test CSV (for testing.fixed) |
+| `testing` | `[testing.fixed]` or `[testing.split]` | How to obtain test set |
+| `testing.fixed` | `[testing.fixed]` + `test = "..."` | Use separate test file |
+| `testing.split` | `[testing.split]` + `split = [0.8, 0.2]` | Split train ratio : test ratio |
+| `classifier` | `classifier = "dt"` | `dt`, `knn`, or `svm` |
+| `parameters` | `[parameters]` + `k = 5` | Classifier hyperparameters (e.g. `k` for KNN) |
+| `distance` | `distance = "euclidean"` | Distance metric for KNN |
+| `goal.t` | `[goal]` + `t = 0.95` | Accuracy threshold (0–1) |
+| `direction` | `[direction.forward]` or `[direction.backward]` | Forward (additive) or backward (subtractive) |
+| `splits` | `splits = 1` | Number of train/test splits |
+| `n` | `n = 10` | Iterations per split |
+| `m` | `m = 5` | Cases added/removed per iteration |
+| `sampling` | `[sampling.stratified]` or `[sampling.random]` | Sampling method |
+| `seed` | `seed = 42` | PRNG seed |
+| `output_dir` | `output_dir = "results"` | Output directory |
+
+### CLI flags (Python)
+
+| Flag | Description |
+|------|-------------|
+| `-c`, `--config` | TOML config file |
+| `--train` | Training CSV |
+| `--test` | Test CSV (for fixed) |
+| `--testing` | `fixed` \| `split` \| `cv` |
+| `--split` | Train,test ratio, e.g. `0.8,0.2` |
+| `--classifier` | `dt` \| `knn` \| `svm` |
+| `--k` | K for KNN (default 3) |
+| `--distance` | Metric for KNN |
+| `-t`, `--threshold` | Accuracy threshold |
+| `--direction` | `forward` \| `backward` |
+| `--splits` | Number of splits |
+| `-n`, `--iterations` | Iterations per split |
+| `-m` | Cases per iteration |
+| `--sampling` | `random` \| `stratified` |
+| `--seed` | Random seed |
+| `-o`, `--output-dir` | Output directory |
+
+## Data format
+
+CSVs must have a **class column** whose header matches `class`, `label`, or `target` (**case-insensitive**).  
+All other columns are features (column order may follow your benchmark file, e.g. `fisher_iris.csv`).
+
+- **fisher_iris.csv**: `class` column  
+- **mnist_train.csv**, **mnist_test.csv**: `label` column  
+
+## Classifiers
+
+| Code | Classifier |
+|------|------------|
+| `dt` | Decision Tree |
+| `knn` | K-Nearest Neighbors |
+| `svm` | Support Vector Machine (RBF) |
+| `hb_vis` | Hyperblock (VisCanvas-style) |
+| `hb_dv` | Hyperblock (DV-style, interval-based) |
 
 ## Output
 
-The tool generates several outputs in the `results` directory:
+Results are written to `{output_dir}/bap_{timestamp}/` (default `results/bap_YYYYMMDD_HHMMSS/`).
 
-1. `accuracy_progression_{classifier}.png`: Plot showing accuracy progression over training set size
-2. `parallel_coordinates_grid.png`: Parallel coordinates plot showing data distribution (if --plot is enabled)
-3. `converged_data_exp_{n}.csv`: CSV files containing the converged training subsets (if --save-converged is enabled)
+Exported **case** and **hyperblock** CSVs use the same tabular shape as the shared datasets (e.g. `computing/machine learning datasets/default/fisher_iris.csv`):
 
-## Data Format
+- One header **`class`** (lowercase), case label for data rows.  
+- One column per **attribute** (same names as the training CSV). **No** separate `*_min` / `*_max` columns and **no** extra ID column.  
+- **`split_N/converged_exp_{id}_seed{seed}.csv`** – converged training cases: `class` holds the dataset label (e.g. `Setosa`).  
+- **`split_N/converged_exp_{id}_seed{seed}_hyperblocks.csv`** – when using `hb_vis` or `hb_dv`: **two rows per hyperblock**. Each row has the same attribute columns; values are the box **minimum** (`…__bottom`) and **maximum** (`…__top`) corners. The `class` cell encodes label, HB id, and edge, e.g. `Setosa__HB0__bottom` / `Setosa__HB0__top`. Any `__` in the dataset label is replaced by `_` so the suffix pattern stays parseable.  
 
-Input CSV files should contain:
-- Features as columns
-- A column named 'class' (case-insensitive) containing the class labels
-- All features should be numeric
+Other output:
 
-## License
+- `config.txt` – Settings used  
+- `statistics.csv` – Aggregate statistics (mean/min/max cases, convergence rate, etc.)  
 
-IterativeSurenessTester is licensed under the MIT License, allowing free use for both personal and commercial purposes. For full terms, see the `LICENSE` file.
+Every converged result CSV has a matching `_hyperblocks.csv` in the same directory when using hyperblock classifiers.
+
+## Algorithm (summary)
+
+1. Set PRNG seed  
+2. For each split: load data (fixed test or split)  
+3. For each iteration: start with empty set (forward) or full set (backward)  
+4. While accuracy &lt; threshold and cases remain: add/remove `m` cases via sampling  
+5. Record converged subsets and compute statistics  
+
+## Bidirectional Processing Definition Notes
+
+This repository originally exposed BAP behavior through `rebuild.py`; that interface has now been folded into the TOML/CLI model used by `bap.py` and `bap.jl`.
+
+### Parameter mapping
+
+- Legacy `--data` maps to `train`
+- Legacy `--test-data` maps to `test` with `testing.fixed`
+- Legacy train/test split flags map to `testing.split` with `split = [train_ratio, test_ratio]`
+- Legacy `--action {additive,subtractive}` maps to `direction {forward,backward}`
+- Legacy `--iterations` maps to `n`
+- Legacy `--threshold` maps to `goal.t`
+
+### Formal algorithm input
+
+Core BAP input fields are:
+- `train`, `test`/`testing`, `classifier`, `parameters`, `distance`
+- `goal.t`, `direction`, `splits`, `n`, `m`
+- `sampling`, `seed`
+
+### Formal algorithm output
+
+- Run configuration export (`config.txt`)
+- Converged case-set CSV artifacts per successful iteration
+- Aggregate statistics including convergence rate and sureness-related measures
+
+### Procedure (expanded)
+
+1. Initialize PRNG with `seed`.
+2. Repeat for each split:
+   - Build train/test partitions (`testing.fixed` or `testing.split`).
+3. Repeat `n` times:
+   - Start with empty set (`direction.forward`) or full train set (`direction.backward`).
+   - Train/test until threshold `goal.t` is met, adding/removing `m` cases each step.
+   - Mark iteration as failed if no cases remain before meeting threshold.
+   - Persist converged set and increment seed on success.
