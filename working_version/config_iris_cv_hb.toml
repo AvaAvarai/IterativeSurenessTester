@@ -1,0 +1,17 @@
+# Hyperblock test: Fisher Iris, 5-fold CV, n=10
+train = "../../machine learning datasets/default/fisher_iris.csv"
+n = 10
+m = 5
+
+[testing.cv]
+folds = 5
+
+[goal]
+t = 0.95
+
+[direction.forward]
+
+[sampling.stratified]
+
+seed = 42
+output_dir = "results"
