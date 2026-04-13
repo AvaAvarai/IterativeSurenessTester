@@ -37,9 +37,9 @@ Configs point at CSVs under [computing/machine learning datasets](../../machine%
   (ScikitLearn requires Python with scikit-learn)
 
 ```bash
-julia -e 'using Pkg; Pkg.activate("."); Pkg.instantiate()'
+julia -e 'using Pkg; Pkg.activate("./julia"); Pkg.instantiate()'
 ```
-(Run from this `BAP rebuild` directory.)
+(Run from the repository root.)
 
 ## Quick Start
 
@@ -65,9 +65,9 @@ python bap.py --train "../../machine learning datasets/default/mnist_train.csv" 
 
 ### Julia
 ```bash
-julia bap.jl -c examples/configs/config_iris.toml
-julia bap.jl -c examples/configs/config_mnist.toml
-julia bap.jl --train "../../machine learning datasets/default/fisher_iris.csv" -c examples/configs/config_iris.toml  # override train path
+julia julia/bap.jl -c examples/configs/config_iris.toml
+julia julia/bap.jl -c examples/configs/config_mnist.toml
+julia julia/bap.jl --train "../../machine learning datasets/default/fisher_iris.csv" -c examples/configs/config_iris.toml  # override train path
 ```
 
 ## Configuration
@@ -162,7 +162,7 @@ Every converged result CSV has a matching `_hyperblocks.csv` in the same directo
 
 ## Bidirectional Processing Definition Notes
 
-This repository originally exposed BAP behavior through `rebuild.py`; that interface has now been folded into the TOML/CLI model used by `bap.py` and `bap.jl`.
+This repository originally exposed BAP behavior through `rebuild.py`; that interface has now been folded into the TOML/CLI model used by `bap.py` and `julia/bap.jl`.
 
 ### Parameter mapping
 

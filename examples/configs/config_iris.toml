@@ -1,6 +1,6 @@
 # Sample BAP config: single CSV with train/test split (e.g. Fisher Iris)
-# Use: python3.11 bap.py -c config_iris.toml
-# Or:  julia bap.jl -c config_iris.toml
+# Use: python3.11 bap.py -c examples/configs/config_iris.toml
+# Or:  julia julia/bap.jl -c examples/configs/config_iris.toml
 
 train = "../../machine learning datasets/default/fisher_iris.csv"
 

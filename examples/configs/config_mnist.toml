@@ -1,6 +1,6 @@
 # BAP config: MNIST train/test, k-NN k=3, correlation (1 - Pearson), m=100, n=1000
-# Use: python bap.py -c config_mnist.toml
-# Or:  julia bap.jl -c config_mnist.toml
+# Use: python bap.py -c examples/configs/config_mnist.toml
+# Or:  julia julia/bap.jl -c examples/configs/config_mnist.toml
 
 train = "../../machine learning datasets/default/mnist_train.csv"
 test = "../../machine learning datasets/default/mnist_test.csv"
