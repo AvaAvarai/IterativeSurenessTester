@@ -1,0 +1,17 @@
+# Quick test: Hyperblock classifiers on Fisher Iris
+train = "../../machine learning datasets/default/fisher_iris.csv"
+classifier = "hb_dv"
+n = 20
+m = 5
+
+[testing.split]
+split = [0.8, 0.2]
+
+[goal]
+t = 0.95
+# Largest HB per class must cover ≥ this fraction of that class's training points
+hb_coverage_t = 0.95
+
+[direction.forward]
+
+[sampling.stratified]

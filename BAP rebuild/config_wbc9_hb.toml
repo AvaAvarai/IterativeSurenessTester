@@ -1,0 +1,30 @@
+# Hyperblock classifier on Wisconsin Breast Cancer (wbc9, 683 cases, 9 features, 2 classes).
+# Goal: high-coverage HBs with hb_dv at 97.5% accuracy.
+#
+# Empirical note (50-seed BAP-style forward sweep, 2026-04-21):
+#   hb_dv test accuracy on wbc9 caps at ~0.9854 across all training subset sizes,
+#   so t = 0.975 is reachable but tight; t = 0.99 yields 0/n converged.
+#
+# hb_coverage_t note: hb_dv always builds a per-class bounding-box HB that geometrically
+# contains 100% of that class's training-subset points, so hb_coverage_t is structurally
+# satisfied (kept for explicitness; it is not the binding constraint here).
+
+train = "../../machine learning datasets/default/wbc9.csv"
+classifier = "hb_dv"
+n = 100
+m = 10
+
+[testing.split]
+split = [0.8, 0.2]
+
+[goal]
+t = 0.975
+# Largest HB per class must cover >= this fraction of that class's training subset.
+hb_coverage_t = 0.95
+
+[direction.forward]
+
+[sampling.stratified]
+
+seed = 42
+output_dir = "results"
